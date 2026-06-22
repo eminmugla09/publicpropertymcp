@@ -1,0 +1,330 @@
+openapi: 3.1.0
+info:
+  title: Property Records ChatGPT Actions
+  version: 1.0.0
+  description: Public property record lookup service with parcel data, ownership information, and recent property transactions from county recorder databases.
+servers:
+  - url: https://publicproperty.up.railway.app
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://publicproperty.up.railway.app/oauth/authorize
+          tokenUrl: https://publicproperty.up.railway.app/oauth/token
+          scopes:
+            read: Read property records
+security:
+  - OAuth2: []
+paths:
+  /actions/search_properties_by_owner:
+    post:
+      operationId: search_properties_by_owner
+      summary: Search properties by owner
+      description: Search public property records by owner name, email, or phone. Returns matching property records with ownership, recording, and utility provider details.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                owner_name:
+                  type: string
+                email:
+                  type: string
+                phone:
+                  type: string
+                city:
+                  type: string
+                state:
+                  type: string
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  found:
+                    type: boolean
+                  count:
+                    type: integer
+                  data_source:
+                    type: string
+                  records:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        owner_name:
+                          type: string
+                        address:
+                          type: string
+                        city:
+                          type: string
+                        state:
+                          type: string
+                        zip:
+                          type: string
+                        county:
+                          type: string
+                        parcel_id:
+                          type: string
+                        legal_description:
+                          type: string
+                        event_type:
+                          type: string
+                        recording_date:
+                          type: string
+                        closing_date:
+                          type: string
+                        document_number:
+                          type: string
+                        book_page:
+                          type: string
+                        sale_price:
+                          type: number
+                        assessed_value:
+                          type: number
+                        confidence:
+                          type: string
+                        source:
+                          type: string
+                        utility_provider:
+                          type: string
+                        property_type:
+                          type: string
+                        has_garage:
+                          type: boolean
+  /actions/get_recent_property_events:
+    post:
+      operationId: get_recent_property_events
+      summary: Get recent property events
+      description: Return recent public property events for a customer, ordered by recording date descending.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                owner_name:
+                  type: string
+                email:
+                  type: string
+                phone:
+                  type: string
+                days_back:
+                  type: integer
+                  default: 90
+      responses:
+        "200":
+          description: Recent events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  found:
+                    type: boolean
+                  count:
+                    type: integer
+                  data_source:
+                    type: string
+                  days_back:
+                    type: integer
+                  reference_date:
+                    type: string
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        owner_name:
+                          type: string
+                        address:
+                          type: string
+                        city:
+                          type: string
+                        state:
+                          type: string
+                        zip:
+                          type: string
+                        county:
+                          type: string
+                        parcel_id:
+                          type: string
+                        legal_description:
+                          type: string
+                        event_type:
+                          type: string
+                        recording_date:
+                          type: string
+                        closing_date:
+                          type: string
+                        document_number:
+                          type: string
+                        book_page:
+                          type: string
+                        sale_price:
+                          type: number
+                        assessed_value:
+                          type: number
+                        confidence:
+                          type: string
+                        source:
+                          type: string
+                        utility_provider:
+                          type: string
+                        property_type:
+                          type: string
+                        has_garage:
+                          type: boolean
+  /actions/match_property_to_customer:
+    post:
+      operationId: match_property_to_customer
+      summary: Match property to customer
+      description: Match a public property record to a known customer using name, email, phone, and known addresses. Simulates a 'new property discovered' event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - customer_name
+              properties:
+                customer_name:
+                  type: string
+                email:
+                  type: string
+                phone:
+                  type: string
+                known_addresses:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Match result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matched:
+                    type: boolean
+                  match_confidence:
+                    type: string
+                    enum: [low, medium, high]
+                  reason:
+                    type: string
+                  matched_property:
+                    type: object
+                    properties:
+                      address:
+                        type: string
+                      city:
+                        type: string
+                      state:
+                        type: string
+                      zip:
+                        type: string
+                      county:
+                        type: string
+                      parcel_id:
+                        type: string
+                      legal_description:
+                        type: string
+                      recording_date:
+                        type: string
+                      closing_date:
+                        type: string
+                      document_number:
+                        type: string
+                      book_page:
+                        type: string
+                      sale_price:
+                        type: number
+                      assessed_value:
+                        type: number
+                      utility_provider:
+                        type: string
+                      property_type:
+                        type: string
+                      has_garage:
+                        type: boolean
+  /actions/get_property_record_by_address:
+    post:
+      operationId: get_property_record_by_address
+      summary: Get property record by address
+      description: Look up a public property record by address. Returns the matching record or a not-found response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - address
+              properties:
+                address:
+                  type: string
+      responses:
+        "200":
+          description: Property record
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  found:
+                    type: boolean
+                  data_source:
+                    type: string
+                  record:
+                    type: object
+                    properties:
+                      owner_name:
+                        type: string
+                      address:
+                        type: string
+                      city:
+                        type: string
+                      state:
+                        type: string
+                      zip:
+                        type: string
+                      county:
+                        type: string
+                      parcel_id:
+                        type: string
+                      legal_description:
+                        type: string
+                      event_type:
+                        type: string
+                      recording_date:
+                        type: string
+                      closing_date:
+                        type: string
+                      document_number:
+                        type: string
+                      book_page:
+                        type: string
+                      sale_price:
+                        type: number
+                      assessed_value:
+                        type: number
+                      confidence:
+                        type: string
+                      source:
+                        type: string
+                      utility_provider:
+                        type: string
+                      property_type:
+                        type: string
+                      has_garage:
+                        type: boolean

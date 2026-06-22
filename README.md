@@ -83,7 +83,9 @@ psql $DATABASE_URL -f seed-data.sql
 
 ## Authentication
 
-The server uses JWT-based authentication. To use the MCP tools:
+The server supports both JWT-based authentication and OAuth 2.0.
+
+### JWT Authentication
 
 1. Register a user:
 ```bash
@@ -106,6 +108,19 @@ curl -X POST http://localhost:3000/mcp \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
+
+### OAuth 2.0
+
+The server implements OAuth 2.0 Authorization Code flow for ChatGPT integration:
+
+- **Authorization Endpoint:** `/oauth/authorize`
+- **Token Endpoint:** `/oauth/token`
+
+For ChatGPT MCP configuration, use:
+- **MCP Server URL:** `https://publicproperty.up.railway.app/mcp`
+- **Authentication:** OAuth
+- **Authorization URL:** `https://publicproperty.up.railway.app/oauth/authorize`
+- **Token URL:** `https://publicproperty.up.railway.app/oauth/token`
 
 ## Run locally
 

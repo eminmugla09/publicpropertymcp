@@ -4,7 +4,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { Pool } from 'pg';
-import { register, login, verifyToken } from './auth.js';
+import { register, login, verifyToken, handleOAuthAuthorization, handleOAuthToken, validateOAuthAccessToken } from './auth.js';
+import express from 'express';
+import cors from 'cors';
 
 const getDatabaseUrl = () => {
   const rawUrl = process.env.DATABASE_URL ?? '';
@@ -322,14 +324,21 @@ const requireAuth = async (request: IncomingMessage, response: ServerResponse): 
   }
 
   const token = authHeader.substring(7);
-  const verification = verifyToken(token);
-
-  if (!verification.valid) {
-    writeJson(response, 401, { error: "Unauthorized", message: "Invalid or expired token" });
-    return { authorized: false };
+  
+  // Try JWT token first
+  const jwtVerification = verifyToken(token);
+  if (jwtVerification.valid) {
+    return { authorized: true, userId: jwtVerification.userId };
+  }
+  
+  // Try OAuth token
+  const oauthVerification = validateOAuthAccessToken(token);
+  if (oauthVerification.valid) {
+    return { authorized: true, userId: oauthVerification.userId };
   }
 
-  return { authorized: true, userId: verification.userId };
+  writeJson(response, 401, { error: "Unauthorized", message: "Invalid or expired token" });
+  return { authorized: false };
 };
 
 const writeJson = (response: ServerResponse, statusCode: number, payload: unknown) => {
@@ -371,7 +380,13 @@ const privacyPageHtml = `<!doctype html>
     <p>The MCP tools return records from a PostgreSQL database with property ownership and registration information. The data includes owner names, addresses, recording dates, and utility provider information.</p>
 
     <h2>Authentication</h2>
-    <p>This server uses JWT-based authentication. All MCP tool calls require a valid JWT token in the Authorization header.</p>
+    <p>This server supports both JWT-based authentication and OAuth 2.0. All MCP tool calls require a valid authentication token in the Authorization header.</p>
+
+    <h2>OAuth 2.0 Endpoints</h2>
+    <ul>
+      <li><strong>Authorization Endpoint:</strong> <code>/oauth/authorize</code></li>
+      <li><strong>Token Endpoint:</strong> <code>/oauth/token</code></li>
+    </ul>
 
     <h2>Contact</h2>
     <p>For questions about this service, contact the developer maintaining this repository.</p>
@@ -663,7 +678,14 @@ const startHttpServer = () => {
 
     if (url.pathname === "/health") {
       console.log(`[${new Date().toISOString()}] Health check requested`);
-      writeJson(response, 200, { status: "ok", mcpPath: "/mcp", privacyPath: "/privacy", authPath: "/auth" });
+      writeJson(response, 200, { 
+        status: "ok", 
+        mcpPath: "/mcp", 
+        privacyPath: "/privacy", 
+        authPath: "/auth",
+        oauthAuthorizePath: "/oauth/authorize",
+        oauthTokenPath: "/oauth/token"
+      });
       return;
     }
 
@@ -701,13 +723,94 @@ const startHttpServer = () => {
       return;
     }
 
+    // OAuth 2.0 Authorization Endpoint
+    if (url.pathname === "/oauth/authorize" && request.method === "GET") {
+      const client_id = url.searchParams.get('client_id');
+      const redirect_uri = url.searchParams.get('redirect_uri');
+      const response_type = url.searchParams.get('response_type');
+      const scope = url.searchParams.get('scope');
+      const state = url.searchParams.get('state');
+      
+      // For demo purposes, we'll use the first user in the database
+      // In production, this would come from a login session
+      let userId = "demo-user-id";
+      try {
+        const userResult = await pool.query('SELECT id FROM users LIMIT 1');
+        if (userResult.rows.length > 0) {
+          userId = userResult.rows[0].id;
+        }
+      } catch (error) {
+        console.error('Error fetching user for OAuth:', error);
+      }
+      
+      try {
+        const authResponse = await handleOAuthAuthorization({
+          response_type: response_type || 'code',
+          client_id: client_id || 'demo-client',
+          redirect_uri: redirect_uri || 'http://localhost:3000/callback',
+          scope: scope || 'read',
+          state: state || undefined
+        }, userId);
+        
+        // Redirect with authorization code
+        const redirectUrl = new URL(redirect_uri || 'http://localhost:3000/callback');
+        redirectUrl.searchParams.set('code', authResponse.code);
+        if (authResponse.state) {
+          redirectUrl.searchParams.set('state', authResponse.state);
+        }
+        
+        response.writeHead(302, { Location: redirectUrl.toString() });
+        response.end();
+        return;
+      } catch (error: any) {
+        writeJson(response, 400, { error: "Authorization failed", message: error.message });
+        return;
+      }
+    }
+
+    // OAuth 2.0 Token Endpoint
+    if (url.pathname === "/oauth/token" && request.method === "POST") {
+      const body = await readRequestBody(request);
+      const { grant_type, code, redirect_uri, client_id, client_secret } = body as {
+        grant_type: string;
+        code: string;
+        redirect_uri: string;
+        client_id: string;
+        client_secret?: string;
+      };
+
+      try {
+        const tokenResponse = await handleOAuthToken({
+          grant_type,
+          code,
+          redirect_uri,
+          client_id,
+          client_secret
+        });
+        
+        writeJson(response, 200, tokenResponse);
+        return;
+      } catch (error: any) {
+        writeJson(response, 400, { error: "Token request failed", message: error.message });
+        return;
+      }
+    }
+
     if (url.pathname === "/mcp") {
       await handleMcpRequest(request, response);
       return;
     }
 
     console.log(`[${new Date().toISOString()}] 404 Not found: ${url.pathname}`);
-    writeJson(response, 404, { error: "Not found", mcpPath: "/mcp", healthPath: "/health", privacyPath: "/privacy", authPath: "/auth" });
+    writeJson(response, 404, { 
+      error: "Not found", 
+      mcpPath: "/mcp", 
+      healthPath: "/health", 
+      privacyPath: "/privacy", 
+      authPath: "/auth",
+      oauthAuthorizePath: "/oauth/authorize",
+      oauthTokenPath: "/oauth/token"
+    });
   }).listen(port, "0.0.0.0", () => {
     console.log(`[${new Date().toISOString()}] Property Records MCP HTTP server listening on port ${port}; endpoint: /mcp`);
   });

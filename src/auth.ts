@@ -1,9 +1,18 @@
 import { Pool } from 'pg';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const SALT_ROUNDS = 10;
+
+// OAuth 2.0 credentials
+const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID || 'demo-client';
+const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET || 'demo-secret';
+
+// OAuth 2.0 storage (in production, use Redis or database)
+const authCodes = new Map<string, { userId: string; expiresAt: number }>();
+const accessTokens = new Map<string, { userId: string; expiresAt: number }>();
 
 const getDatabaseUrl = () => {
   const rawUrl = process.env.DATABASE_URL ?? '';
@@ -193,4 +202,120 @@ export async function getUserById(userId: string): Promise<User | null> {
     console.error('Get user error:', error);
     return null;
   }
+}
+
+// OAuth 2.0 Authorization Code Flow
+export interface OAuthAuthorizationRequest {
+  response_type: string;
+  client_id: string;
+  redirect_uri: string;
+  scope?: string;
+  state?: string;
+}
+
+export interface OAuthTokenRequest {
+  grant_type: string;
+  code: string;
+  redirect_uri: string;
+  client_id: string;
+  client_secret?: string;
+  scope?: string;
+}
+
+export interface OAuthTokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  scope?: string;
+}
+
+// Generate authorization code
+export function generateAuthCode(userId: string): string {
+  const code = crypto.randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+  authCodes.set(code, { userId, expiresAt });
+  return code;
+}
+
+// Validate authorization code
+export function validateAuthCode(code: string): { valid: boolean; userId?: string } {
+  const authData = authCodes.get(code);
+  if (!authData) {
+    return { valid: false };
+  }
+  
+  if (Date.now() > authData.expiresAt) {
+    authCodes.delete(code);
+    return { valid: false };
+  }
+  
+  authCodes.delete(code); // One-time use
+  return { valid: true, userId: authData.userId };
+}
+
+// Generate OAuth access token
+export function generateOAuthAccessToken(userId: string): string {
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
+  accessTokens.set(token, { userId, expiresAt });
+  return token;
+}
+
+// Validate OAuth access token
+export function validateOAuthAccessToken(token: string): { valid: boolean; userId?: string } {
+  const tokenData = accessTokens.get(token);
+  if (!tokenData) {
+    return { valid: false };
+  }
+  
+  if (Date.now() > tokenData.expiresAt) {
+    accessTokens.delete(token);
+    return { valid: false };
+  }
+  
+  return { valid: true, userId: tokenData.userId };
+}
+
+// Handle OAuth authorization request
+export async function handleOAuthAuthorization(
+  request: OAuthAuthorizationRequest,
+  userId: string
+): Promise<{ code: string; state?: string }> {
+  // Validate client_id
+  if (request.client_id !== OAUTH_CLIENT_ID) {
+    throw new Error('Invalid client_id');
+  }
+  
+  const code = generateAuthCode(userId);
+  return { code, state: request.state };
+}
+
+// Handle OAuth token request
+export async function handleOAuthToken(
+  request: OAuthTokenRequest
+): Promise<OAuthTokenResponse> {
+  const { code, client_id, client_secret } = request;
+  
+  // Validate client credentials
+  if (client_id !== OAUTH_CLIENT_ID) {
+    throw new Error('Invalid client_id');
+  }
+  
+  if (client_secret !== OAUTH_CLIENT_SECRET) {
+    throw new Error('Invalid client_secret');
+  }
+  
+  const validation = validateAuthCode(code);
+  if (!validation.valid || !validation.userId) {
+    throw new Error('Invalid or expired authorization code');
+  }
+  
+  const access_token = generateOAuthAccessToken(validation.userId);
+  
+  return {
+    access_token,
+    token_type: 'Bearer',
+    expires_in: 3600,
+    scope: request.scope || 'read'
+  };
 }
