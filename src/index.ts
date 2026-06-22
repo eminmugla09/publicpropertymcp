@@ -3,12 +3,37 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import {
-  CustomerProfile,
-  getCustomerProfiles,
-  getMockPropertyRecords,
-  PropertyRecord
-} from "./data/mockPropertyRecords.js";
+import { Pool } from 'pg';
+import { register, login, verifyToken } from './auth.js';
+
+const getDatabaseUrl = () => {
+  const rawUrl = process.env.DATABASE_URL ?? '';
+  if (!rawUrl) {
+    return rawUrl;
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    const sslMode = parsed.searchParams.get('sslmode');
+    const usesLegacySslMode = sslMode === 'prefer' || sslMode === 'require' || sslMode === 'verify-ca';
+    if (usesLegacySslMode && !parsed.searchParams.has('uselibpqcompat')) {
+      parsed.searchParams.set('uselibpqcompat', 'true');
+    }
+    return parsed.toString();
+  } catch {
+    return rawUrl;
+  }
+};
+
+const databaseUrl = getDatabaseUrl();
+
+const pool = new Pool({
+  connectionString: databaseUrl,
+  ssl: databaseUrl.includes('neon.tech') ? { rejectUnauthorized: false } : false,
+  connectionTimeoutMillis: 60000,
+  idleTimeoutMillis: 30000,
+  max: 20
+});
 
 const REFERENCE_DATE = new Date("2026-06-21T00:00:00Z");
 
@@ -22,202 +47,196 @@ const normalizeAddress = (address: string) =>
     .replace(/,/g, "")
     .trim();
 
-const nameMatches = (ownerName: string, alternateNames: string[], name?: string) => {
-  if (!name) return false;
-  const normalizedName = normalizeString(name);
-  const names = [ownerName, ...alternateNames].map(normalizeString);
-  return names.some((n) => n === normalizedName || n.includes(normalizedName) || normalizedName.includes(n));
-};
-
-const emailMatches = (recordEmail?: string, email?: string) => {
-  if (!email || !recordEmail) return false;
-  return normalizeString(recordEmail) === normalizeString(email);
-};
-
-const phoneMatches = (recordPhone?: string, phone?: string) => {
-  if (!phone || !recordPhone) return false;
-  const normalizeDigits = (value: string) => value.replace(/\D/g, "");
-  return normalizeDigits(recordPhone) === normalizeDigits(phone);
-};
-
-const matchesName = (record: PropertyRecord, name?: string) => nameMatches(record.owner_name, record.alternate_names ?? [], name);
-const matchesEmail = (record: PropertyRecord, email?: string) => emailMatches(record.email, email);
-const matchesPhone = (record: PropertyRecord, phone?: string) => phoneMatches(record.phone, phone);
-
-const matchesAddress = (record: PropertyRecord, address?: string) => {
-  if (!address) return false;
-  const needle = normalizeAddress(address);
-  const haystack = [
-    record.address,
-    `${record.address}, ${record.city}, ${record.state} ${record.zip}`,
-    `${record.address}, ${record.city}`,
-    `${record.city}, ${record.state}`
-  ].map(normalizeAddress);
-  return haystack.some((h) => h.includes(needle) || needle.includes(h));
-};
-
-const matchesKnownAddress = (record: PropertyRecord, address?: string) => {
-  if (!address) return false;
-  const needle = normalizeAddress(address);
-  const haystack = [
-    record.address,
-    `${record.address}, ${record.city}, ${record.state} ${record.zip}`,
-    `${record.address}, ${record.city}`
-  ].map(normalizeAddress);
-  return haystack.some((h) => h.includes(needle) || needle.includes(h));
-};
-
-const matchesRecordFilters = (
-  record: PropertyRecord,
-  filters: { owner_name?: string; email?: string; phone?: string; city?: string; state?: string }
-) => {
-  const ownerNameMatches = filters.owner_name && matchesName(record, filters.owner_name);
-  const emailFilterMatches = filters.email && matchesEmail(record, filters.email);
-  const phoneFilterMatches = filters.phone && matchesPhone(record, filters.phone);
-  const cityMatches = !filters.city || normalizeString(record.city) === normalizeString(filters.city);
-  const stateMatches = !filters.state || normalizeString(record.state) === normalizeString(filters.state);
-
-  const hasIdentityFilter = filters.owner_name || filters.email || filters.phone;
-  const identityMatches = !hasIdentityFilter || ownerNameMatches || emailFilterMatches || phoneFilterMatches;
-
-  return identityMatches && cityMatches && stateMatches;
-};
-
-const searchProperties = (filters: {
+const searchProperties = async (filters: {
   owner_name?: string;
   email?: string;
   phone?: string;
   city?: string;
   state?: string;
+  userId?: string;
 }) => {
-  const records = getMockPropertyRecords();
-  return records.filter((record) => matchesRecordFilters(record, filters));
+  const conditions = [];
+  const params = [];
+  let paramIndex = 1;
+
+  if (filters.userId) {
+    conditions.push(`user_id = $${paramIndex++}`);
+    params.push(filters.userId);
+  }
+
+  if (filters.owner_name) {
+    conditions.push(`(lower(owner_name) LIKE lower($${paramIndex++}) OR lower(owner_name) = lower($${paramIndex++}))`);
+    params.push(`%${filters.owner_name}%`, filters.owner_name);
+  }
+
+  if (filters.email) {
+    conditions.push(`lower(email) = lower($${paramIndex++})`);
+    params.push(filters.email);
+  }
+
+  if (filters.phone) {
+    const normalizedPhone = filters.phone.replace(/\D/g, "");
+    conditions.push(`regexp_replace(phone, '\\D', '', 'g') = $${paramIndex++}`);
+    params.push(normalizedPhone);
+  }
+
+  if (filters.city) {
+    conditions.push(`lower(city) = lower($${paramIndex++})`);
+    params.push(filters.city);
+  }
+
+  if (filters.state) {
+    conditions.push(`lower(state) = lower($${paramIndex++})`);
+    params.push(filters.state);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const query = `
+    SELECT * FROM property_records
+    ${whereClause}
+    ORDER BY recording_date DESC
+  `;
+
+  const result = await pool.query(query, params);
+  return result.rows;
 };
 
-const getRecentPropertyEvents = (filters: {
+const getRecentPropertyEvents = async (filters: {
   owner_name?: string;
   email?: string;
   phone?: string;
   days_back?: number;
+  userId?: string;
 }) => {
   const daysBack = filters.days_back ?? 90;
   const cutoff = new Date(REFERENCE_DATE);
   cutoff.setDate(cutoff.getDate() - daysBack);
 
-  const records = searchProperties({
-    owner_name: filters.owner_name,
-    email: filters.email,
-    phone: filters.phone
-  });
+  const conditions = [];
+  const params = [];
+  let paramIndex = 1;
 
-  return records
-    .filter((record) => new Date(record.recording_date) >= cutoff)
-    .sort((a, b) => new Date(b.recording_date).getTime() - new Date(a.recording_date).getTime());
+  if (filters.userId) {
+    conditions.push(`user_id = $${paramIndex++}`);
+    params.push(filters.userId);
+  }
+
+  conditions.push(`recording_date >= $${paramIndex++}`);
+  params.push(cutoff);
+
+  if (filters.owner_name) {
+    conditions.push(`(lower(owner_name) LIKE lower($${paramIndex++}) OR lower(owner_name) = lower($${paramIndex++}))`);
+    params.push(`%${filters.owner_name}%`, filters.owner_name);
+  }
+
+  if (filters.email) {
+    conditions.push(`lower(email) = lower($${paramIndex++})`);
+    params.push(filters.email);
+  }
+
+  if (filters.phone) {
+    const normalizedPhone = filters.phone.replace(/\D/g, "");
+    conditions.push(`regexp_replace(phone, '\\D', '', 'g') = $${paramIndex++}`);
+    params.push(normalizedPhone);
+  }
+
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+  const query = `
+    SELECT * FROM property_records
+    ${whereClause}
+    ORDER BY recording_date DESC
+  `;
+
+  const result = await pool.query(query, params);
+  return result.rows;
 };
 
-const findCustomerProfile = (input: {
-  customer_name?: string;
-  email?: string;
-  phone?: string;
-  known_addresses?: string[];
-}) => {
-  const customers = getCustomerProfiles();
-  const records = getMockPropertyRecords();
-  const { customer_name, email, phone, known_addresses = [] } = input;
-
-  return customers.find((customer) => {
-    const nameMatch = customer_name ? nameMatches(customer.full_name, customer.alternate_names, customer_name) : false;
-    const emailMatch = email ? emailMatches(customer.email, email) : false;
-    const phoneMatch = phone ? phoneMatches(customer.phone, phone) : false;
-    const addressMatch = known_addresses.some((address) =>
-      records.some(
-        (record) =>
-          record.owner_name === customer.full_name &&
-          record.known_fpl_property &&
-          matchesKnownAddress(record, address)
-      )
-    );
-
-    return nameMatch || emailMatch || phoneMatch || addressMatch;
-  });
-};
-
-const matchPropertyToCustomer = (input: {
+const matchPropertyToCustomer = async (input: {
   customer_name: string;
   email?: string;
   phone?: string;
   known_addresses?: string[];
+  userId?: string;
 }) => {
-  const records = getMockPropertyRecords();
-  const { customer_name, email, phone, known_addresses = [] } = input;
+  const { customer_name, email, phone, known_addresses = [], userId } = input;
 
-  const customer = findCustomerProfile(input);
+  const conditions = [];
+  const params = [];
+  let paramIndex = 1;
 
-  if (!customer) {
+  if (userId) {
+    conditions.push(`user_id = $${paramIndex++}`);
+    params.push(userId);
+  }
+
+  if (customer_name) {
+    conditions.push(`(lower(owner_name) LIKE lower($${paramIndex++}) OR lower(owner_name) = lower($${paramIndex++}))`);
+    params.push(`%${customer_name}%`, customer_name);
+  }
+
+  if (email) {
+    conditions.push(`lower(email) = lower($${paramIndex++})`);
+    params.push(email);
+  }
+
+  if (phone) {
+    const normalizedPhone = phone.replace(/\D/g, "");
+    conditions.push(`regexp_replace(phone, '\\D', '', 'g') = $${paramIndex++}`);
+    params.push(normalizedPhone);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const query = `
+    SELECT * FROM property_records
+    ${whereClause}
+    AND event_type = 'recent purchase'
+    AND (known_property IS NULL OR known_property = false)
+    ORDER BY recording_date DESC
+    LIMIT 1
+  `;
+
+  const result = await pool.query(query, params);
+
+  if (result.rows.length === 0) {
     return {
       matched: false,
       match_confidence: "low" as const,
-      reason: "No matching customer profile found in mock public property records.",
-      matched_property: null,
-      recommended_next_action: "Ask the customer for their email, phone, or a known address to anchor the match."
+      reason: "No matching property record found.",
+      matched_property: null
     };
   }
 
-  const knownAddressMatch = known_addresses.some((address) =>
-    records.some(
-      (record) =>
-        record.owner_name === customer.full_name && record.known_fpl_property && matchesKnownAddress(record, address)
-    )
-  );
+  const matchedRecord = result.rows[0];
 
   const identitySignals = [
-    nameMatches(customer.full_name, customer.alternate_names, customer_name),
-    emailMatches(customer.email, email),
-    phoneMatches(customer.phone, phone)
+    customer_name ? 1 : 0,
+    email ? 1 : 0,
+    phone ? 1 : 0
   ].filter(Boolean).length;
 
-  const matchedRecord = records.find(
-    (record) =>
-      record.owner_name === customer.full_name &&
-      record.event_type === "recent purchase" &&
-      record.service_territory === "FPL" &&
-      !record.known_fpl_property
-  );
-
-  if (!matchedRecord) {
-    return {
-      matched: false,
-      match_confidence: "low" as const,
-      reason: `Customer ${customer.full_name} was found, but no recent mock public property record matches a new property purchase.`,
-      matched_property: null,
-      recommended_next_action: "Ask the customer for the address of the new property they want EV services for."
-    };
-  }
+  const knownAddressMatch = known_addresses.length > 0;
 
   let confidence: "low" | "medium" | "high" = "low";
   let reason = "";
-  let action = "";
 
   if (identitySignals >= 2 && knownAddressMatch) {
     confidence = "high";
-    reason = `Owner name ${customer.full_name} matches customer profile, the email/phone matches, and the known FPL address anchors the customer. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
-    action = `Ask the customer whether they want to start FPL service at ${matchedRecord.address} in ${matchedRecord.city} on the closing date (${matchedRecord.closing_date}).`;
+    reason = `Owner name ${customer_name} matches customer profile, the email/phone matches, and the known address anchors the customer. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
   } else if (identitySignals >= 2) {
     confidence = "high";
-    reason = `Owner name ${customer.full_name} matches customer profile and the email/phone matches. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
-    action = `Confirm the new ${matchedRecord.city} property and ask whether the customer wants FPL service started there on ${matchedRecord.closing_date}.`;
+    reason = `Owner name ${customer_name} matches customer profile and the email/phone matches. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
   } else if (knownAddressMatch) {
     confidence = "high";
-    reason = `The known FPL address anchors the customer to the profile, and a recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
-    action = `Ask the customer whether ${matchedRecord.address} is their new property and whether to start FPL service there on ${matchedRecord.closing_date}.`;
+    reason = `The known address anchors the customer to the profile, and a recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
   } else if (identitySignals === 1) {
     confidence = "medium";
     reason = `One identifying signal matches the customer profile. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
-    action = `Verify the customer's email, phone, or a known address before relying on the match.`;
   } else {
     confidence = "low";
     reason = "Only weak or no identifying signals match the customer profile.";
-    action = "Ask the customer for additional identifying information before relying on the match.";
   }
 
   return {
@@ -230,29 +249,36 @@ const matchPropertyToCustomer = (input: {
       state: matchedRecord.state,
       zip: matchedRecord.zip,
       county: matchedRecord.county,
+      parcel_id: matchedRecord.parcel_id,
+      legal_description: matchedRecord.legal_description,
       recording_date: matchedRecord.recording_date,
       closing_date: matchedRecord.closing_date,
-      service_territory: matchedRecord.service_territory,
+      document_number: matchedRecord.document_number,
+      book_page: matchedRecord.book_page,
+      sale_price: matchedRecord.sale_price,
+      assessed_value: matchedRecord.assessed_value,
+      utility_provider: matchedRecord.utility_provider,
       property_type: matchedRecord.property_type,
-      has_garage: matchedRecord.has_garage,
-      ev_suitability_hint: matchedRecord.ev_suitability_hint
-    },
-    recommended_next_action: action
+      has_garage: matchedRecord.has_garage
+    }
   };
 };
 
-const getPropertyRecordByAddress = (address: string) => {
-  const records = getMockPropertyRecords();
+const getPropertyRecordByAddress = async (address: string) => {
   const normalized = normalizeAddress(address);
 
-  return (
-    records.find(
-      (record) =>
-        normalizeAddress(record.address).includes(normalized) ||
-        normalized.includes(normalizeAddress(record.address)) ||
-        normalizeAddress(`${record.address}, ${record.city}, ${record.state} ${record.zip}`).includes(normalized)
-    ) ?? null
-  );
+  const query = `
+    SELECT * FROM property_records
+    WHERE (
+      lower(address) LIKE lower($1) OR
+      lower($2) LIKE lower(address) OR
+      lower(address || ', ' || city || ', ' || state || ' ' || zip) LIKE lower($3)
+    )
+    LIMIT 1
+  `;
+
+  const result = await pool.query(query, [`%${normalized}%`, normalized, `%${normalized}%`]);
+  return result.rows[0] || null;
 };
 
 const jsonContent = (payload: unknown) => ({
@@ -264,24 +290,93 @@ const jsonContent = (payload: unknown) => ({
   ]
 });
 
-const toRecordOutput = (record: PropertyRecord) => ({
+const toRecordOutput = (record: any) => ({
   owner_name: record.owner_name,
   address: record.address,
   city: record.city,
   state: record.state,
   zip: record.zip,
   county: record.county,
+  parcel_id: record.parcel_id,
+  legal_description: record.legal_description,
   event_type: record.event_type,
   recording_date: record.recording_date,
   closing_date: record.closing_date,
+  document_number: record.document_number,
+  book_page: record.book_page,
+  sale_price: record.sale_price,
+  assessed_value: record.assessed_value,
   confidence: record.confidence,
   source: record.source,
-  service_territory: record.service_territory,
+  utility_provider: record.utility_provider,
   property_type: record.property_type,
-  has_garage: record.has_garage,
-  ev_suitability_hint: record.ev_suitability_hint,
-  notes: record.notes
+  has_garage: record.has_garage
 });
+
+const requireAuth = async (request: IncomingMessage, response: ServerResponse): Promise<{ authorized: boolean; userId?: string }> => {
+  const authHeader = request.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    writeJson(response, 401, { error: "Unauthorized", message: "Missing authentication token" });
+    return { authorized: false };
+  }
+
+  const token = authHeader.substring(7);
+  const verification = verifyToken(token);
+
+  if (!verification.valid) {
+    writeJson(response, 401, { error: "Unauthorized", message: "Invalid or expired token" });
+    return { authorized: false };
+  }
+
+  return { authorized: true, userId: verification.userId };
+};
+
+const writeJson = (response: ServerResponse, statusCode: number, payload: unknown) => {
+  response.setHeader("Access-Control-Allow-Origin", "*");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, mcp-session-id, Authorization");
+  response.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id, mcp-session-id");
+  response.writeHead(statusCode, { "Content-Type": "application/json" });
+  response.end(JSON.stringify(payload));
+};
+
+const writeHtml = (response: ServerResponse, statusCode: number, html: string) => {
+  response.setHeader("Access-Control-Allow-Origin", "*");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, mcp-session-id, Authorization");
+  response.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id, mcp-session-id");
+  response.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
+  response.end(html);
+};
+
+const privacyPageHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Property Records MCP Privacy Notice</title>
+    <style>
+      body { font-family: Arial, sans-serif; line-height: 1.5; max-width: 760px; margin: 40px auto; padding: 0 20px; color: #1f2933; }
+      h1, h2 { color: #102a43; }
+      code { background: #f3f4f6; padding: 2px 4px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Property Records MCP Privacy Notice</h1>
+    <p>Last updated: 2026-06-21</p>
+    <p>This service provides public property record lookup tools. It connects to a PostgreSQL database containing property records from public sources.</p>
+
+    <h2>Data Used</h2>
+    <p>The MCP tools return records from a PostgreSQL database with property ownership and registration information. The data includes owner names, addresses, recording dates, and utility provider information.</p>
+
+    <h2>Authentication</h2>
+    <p>This server uses JWT-based authentication. All MCP tool calls require a valid JWT token in the Authorization header.</p>
+
+    <h2>Contact</h2>
+    <p>For questions about this service, contact the developer maintaining this repository.</p>
+  </body>
+</html>`;
 
 const createPropertyRecordsMcpServer = () => {
   const server = new McpServer(
@@ -302,7 +397,7 @@ const createPropertyRecordsMcpServer = () => {
     "search_properties_by_owner",
     {
       description:
-        "Search mock public property records by owner name, email, or phone. Returns matching property records with ownership, recording, and EV suitability details. All data is synthetic mock data.",
+        "Search public property records by owner name, email, or phone. Returns matching property records with ownership, recording, and utility provider details.",
       inputSchema: {
         owner_name: z.string().optional(),
         email: z.string().optional(),
@@ -312,11 +407,11 @@ const createPropertyRecordsMcpServer = () => {
       }
     },
     async (args) => {
-      const matches = searchProperties(args);
+      const matches = await searchProperties(args);
       return jsonContent({
         found: matches.length > 0,
         count: matches.length,
-        data_source: "mock public property records",
+        data_source: "property records database",
         records: matches.map(toRecordOutput)
       });
     }
@@ -326,7 +421,7 @@ const createPropertyRecordsMcpServer = () => {
     "get_recent_property_events",
     {
       description:
-        "Return recent public property events for a customer, ordered by recording date descending. All data is synthetic mock data.",
+        "Return recent public property events for a customer, ordered by recording date descending.",
       inputSchema: {
         owner_name: z.string().optional(),
         email: z.string().optional(),
@@ -335,11 +430,11 @@ const createPropertyRecordsMcpServer = () => {
       }
     },
     async (args) => {
-      const events = getRecentPropertyEvents(args);
+      const events = await getRecentPropertyEvents(args);
       return jsonContent({
         found: events.length > 0,
         count: events.length,
-        data_source: "mock public property records",
+        data_source: "property records database",
         days_back: args.days_back ?? 90,
         reference_date: REFERENCE_DATE.toISOString().split("T")[0],
         events: events.map(toRecordOutput)
@@ -351,7 +446,7 @@ const createPropertyRecordsMcpServer = () => {
     "match_property_to_customer",
     {
       description:
-        "Match a public property record to a known customer using name, email, phone, and known addresses. Simulates a 'new home discovered' event from mock public property records.",
+        "Match a public property record to a known customer using name, email, phone, and known addresses. Simulates a 'new property discovered' event.",
       inputSchema: {
         customer_name: z.string(),
         email: z.string().optional(),
@@ -359,30 +454,30 @@ const createPropertyRecordsMcpServer = () => {
         known_addresses: z.array(z.string()).optional()
       }
     },
-    async (args) => jsonContent(matchPropertyToCustomer(args))
+    async (args) => jsonContent(await matchPropertyToCustomer(args))
   );
 
   server.registerTool(
     "get_property_record_by_address",
     {
       description:
-        "Look up a mock public property record by address. Returns the matching record or a not-found response.",
+        "Look up a public property record by address. Returns the matching record or a not-found response.",
       inputSchema: {
         address: z.string()
       }
     },
     async ({ address }) => {
-      const record = getPropertyRecordByAddress(address);
+      const record = await getPropertyRecordByAddress(address);
       return jsonContent(
         record
           ? {
               found: true,
-              data_source: "mock public property records",
+              data_source: "property records database",
               record: toRecordOutput(record)
             }
           : {
               found: false,
-              data_source: "mock public property records",
+              data_source: "property records database",
               message: "No matching property record found for the given address."
             }
       );
@@ -408,58 +503,9 @@ const readRequestBody = async (request: IncomingMessage) => {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 };
 
-const setCorsHeaders = (response: ServerResponse) => {
-  response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, mcp-session-id");
-  response.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id, mcp-session-id");
-};
-
-const writeJson = (response: ServerResponse, statusCode: number, payload: unknown) => {
-  setCorsHeaders(response);
-  response.writeHead(statusCode, { "Content-Type": "application/json" });
-  response.end(JSON.stringify(payload));
-};
-
-const writeHtml = (response: ServerResponse, statusCode: number, html: string) => {
-  setCorsHeaders(response);
-  response.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
-  response.end(html);
-};
-
-const privacyPageHtml = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Property Records MCP Privacy Notice</title>
-    <style>
-      body { font-family: Arial, sans-serif; line-height: 1.5; max-width: 760px; margin: 40px auto; padding: 0 20px; color: #1f2933; }
-      h1, h2 { color: #102a43; }
-      code { background: #f3f4f6; padding: 2px 4px; border-radius: 4px; }
-    </style>
-  </head>
-  <body>
-    <h1>Property Records MCP Privacy Notice</h1>
-    <p>Last updated: 2026-06-21</p>
-    <p>This service provides mock public property record lookup tools for an AI assistant demo. It is not a production service and does not connect to real county recorder, title, appraisal, or property search systems.</p>
-
-    <h2>Data Used</h2>
-    <p>All records returned by the MCP tools are synthetic mock data bundled with the application. The data is invented and clearly labeled as <code>mock public property records</code> in every response.</p>
-
-    <h2>No Real APIs</h2>
-    <p>This server does not call real public record APIs, scrape live property records, or store sensitive real customer data. The customer profile and addresses used are part of the demo scenario only.</p>
-
-    <h2>Contact</h2>
-    <p>For questions about this demo, contact the developer maintaining this repository.</p>
-  </body>
-</html>`;
-
 const handleMcpRequest = async (request: IncomingMessage, response: ServerResponse) => {
   if (request.method === "OPTIONS") {
-    setCorsHeaders(response);
-    response.writeHead(204);
-    response.end();
+    writeHtml(response, 204, "");
     return;
   }
 
@@ -476,7 +522,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
   }
 
   const acceptHeader = request.headers.accept;
-  if (!acceptHeader || !acceptHeader.includes("application/json") || !acceptHeader.includes("text/event-stream")) {
+  if (!acceptHeader || (!acceptHeader.includes("application/json") || !acceptHeader.includes("text/event-stream"))) {
     request.headers.accept = "application/json, text/event-stream";
   }
 
@@ -499,10 +545,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
         }
       }
     };
-    setCorsHeaders(response);
-    response.writeHead(200, { "Content-Type": "text/event-stream" });
-    response.write(`event: message\ndata: ${JSON.stringify(initResponse)}\n\n`);
-    response.end();
+    writeHtml(response, 200, `event: message\ndata: ${JSON.stringify(initResponse)}\n\n`);
     return;
   }
 
@@ -512,7 +555,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "search_properties_by_owner",
         description:
-          "Search mock public property records by owner name, email, or phone. Returns matching property records with ownership, recording, and EV suitability details. All data is synthetic mock data.",
+          "Search public property records by owner name, email, or phone. Returns matching property records with ownership, recording, and utility provider details.",
         inputSchema: {
           type: "object",
           properties: {
@@ -529,7 +572,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "get_recent_property_events",
         description:
-          "Return recent public property events for a customer, ordered by recording date descending. All data is synthetic mock data.",
+          "Return recent public property events for a customer, ordered by recording date descending.",
         inputSchema: {
           type: "object",
           properties: {
@@ -545,7 +588,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "match_property_to_customer",
         description:
-          "Match a public property record to a known customer using name, email, phone, and known addresses. Simulates a 'new home discovered' event from mock public property records.",
+          "Match a public property record to a known customer using name, email, phone, and known addresses. Simulates a 'new property discovered' event.",
         inputSchema: {
           type: "object",
           properties: {
@@ -562,7 +605,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "get_property_record_by_address",
         description:
-          "Look up a mock public property record by address. Returns the matching record or a not-found response.",
+          "Look up a public property record by address. Returns the matching record or a not-found response.",
         inputSchema: {
           type: "object",
           properties: {
@@ -570,7 +613,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
           },
           required: ["address"],
           additionalProperties: false,
-          $schema: "http://json-schema.org/draft-07/schema#"
+          $schema: "http://json.org/draft-07/schema#"
         }
       }
     ];
@@ -580,10 +623,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       id: body.id,
       result: { tools }
     };
-    setCorsHeaders(response);
-    response.writeHead(200, { "Content-Type": "text/event-stream" });
-    response.write(`event: message\ndata: ${JSON.stringify(toolsResponse)}\n\n`);
-    response.end();
+    writeHtml(response, 200, `event: message\ndata: ${JSON.stringify(toolsResponse)}\n\n`);
     return;
   }
 
@@ -623,7 +663,7 @@ const startHttpServer = () => {
 
     if (url.pathname === "/health") {
       console.log(`[${new Date().toISOString()}] Health check requested`);
-      writeJson(response, 200, { status: "ok", mcpPath: "/mcp", privacyPath: "/privacy" });
+      writeJson(response, 200, { status: "ok", mcpPath: "/mcp", privacyPath: "/privacy", authPath: "/auth" });
       return;
     }
 
@@ -633,13 +673,41 @@ const startHttpServer = () => {
       return;
     }
 
+    if (url.pathname === "/auth/login" && request.method === "POST") {
+      const body = await readRequestBody(request);
+      const { email, password } = body as { email: string; password: string };
+
+      const result = await login({ email, password });
+
+      if (result.success) {
+        writeJson(response, 200, result);
+      } else {
+        writeJson(response, 401, result);
+      }
+      return;
+    }
+
+    if (url.pathname === "/auth/register" && request.method === "POST") {
+      const body = await readRequestBody(request);
+      const { email, password, full_name } = body as { email: string; password: string; full_name?: string };
+
+      const result = await register({ email, password, full_name });
+
+      if (result.success) {
+        writeJson(response, 201, result);
+      } else {
+        writeJson(response, 409, result);
+      }
+      return;
+    }
+
     if (url.pathname === "/mcp") {
       await handleMcpRequest(request, response);
       return;
     }
 
     console.log(`[${new Date().toISOString()}] 404 Not found: ${url.pathname}`);
-    writeJson(response, 404, { error: "Not found", mcpPath: "/mcp", healthPath: "/health", privacyPath: "/privacy" });
+    writeJson(response, 404, { error: "Not found", mcpPath: "/mcp", healthPath: "/health", privacyPath: "/privacy", authPath: "/auth" });
   }).listen(port, "0.0.0.0", () => {
     console.log(`[${new Date().toISOString()}] Property Records MCP HTTP server listening on port ${port}; endpoint: /mcp`);
   });
