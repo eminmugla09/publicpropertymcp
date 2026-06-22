@@ -271,18 +271,22 @@ const matchPropertyToCustomer = async (input: {
 
 const getPropertyRecordByAddress = async (address: string) => {
   const normalized = normalizeAddress(address);
-  const pattern = `%${normalized}%`;
+  // Use the portion before the first comma as the street address for flexible matching
+  const streetPart = normalized.split(',')[0].trim();
+  const fullPattern = `%${normalized}%`;
+  const streetPattern = `%${streetPart}%`;
 
   const query = `
     SELECT * FROM property_records
     WHERE (
       lower(address) LIKE lower($1) OR
-      lower(address || ' ' || city || ' ' || state || ' ' || zip) LIKE lower($1)
+      lower(address || ' ' || city || ' ' || state || ' ' || zip) LIKE lower($1) OR
+      lower(address) LIKE lower($2)
     )
     LIMIT 1
   `;
 
-  const result = await pool.query(query, [pattern]);
+  const result = await pool.query(query, [fullPattern, streetPattern]);
   return result.rows[0] || null;
 };
 
