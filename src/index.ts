@@ -4,10 +4,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { Pool } from 'pg';
-import { register, login, verifyToken, handleOAuthAuthorization, handleOAuthToken, ensureOAuthClient } from './auth.js';
+import { register, login, verifyToken, handleOAuthToken, ensureOAuthClient, getRegisteredOauthClient } from './auth.js';
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
 
 const getDatabaseUrl = () => {
   const rawUrl = process.env.DATABASE_URL ?? '';
@@ -354,6 +356,30 @@ const writeHtml = (response: ServerResponse, statusCode: number, html: string) =
   response.end(html);
 };
 
+const setCorsHeaders = (response: ServerResponse) => {
+  response.setHeader('Access-Control-Allow-Origin', '*');
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Mcp-Session-Id, mcp-session-id');
+  response.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, mcp-session-id');
+};
+
+const parseRequestBodyFields = (raw: unknown, request: IncomingMessage) => {
+  const contentType = request.headers["content-type"] ?? "";
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    const bodyStr = Buffer.isBuffer(raw) ? raw.toString() : (typeof raw === 'string' ? raw : JSON.stringify(raw));
+    return new URLSearchParams(bodyStr);
+  }
+
+  const fields = new URLSearchParams();
+  const body = (raw || {}) as Record<string, string>;
+  for (const [key, value] of Object.entries(body)) {
+    if (typeof value === "string") {
+      fields.set(key, value);
+    }
+  }
+  return fields;
+};
+
 const privacyPageHtml = `<!doctype html>
 <html lang="en">
   <head>
@@ -387,6 +413,44 @@ const privacyPageHtml = `<!doctype html>
     <p>For questions about this service, contact the developer maintaining this repository.</p>
   </body>
 </html>`;
+
+const oauthLoginPageHtml = (params: string, error?: string) => `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Property Records Agent – Sign In</title>
+    <style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:system-ui,sans-serif;background:#f0f4f8;display:flex;align-items:center;justify-content:center;min-height:100vh}
+      .card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.1);padding:40px;width:100%;max-width:400px}
+      .logo{font-size:22px;font-weight:700;color:#0050a0;margin-bottom:8px}
+      .subtitle{color:#666;font-size:14px;margin-bottom:28px}
+      label{display:block;font-size:13px;font-weight:600;color:#333;margin-bottom:6px}
+      input{width:100%;padding:10px 14px;border:1px solid #d0d7de;border-radius:8px;font-size:15px;margin-bottom:18px;outline:none;transition:border .2s}
+      input:focus{border-color:#0050a0}
+      button{width:100%;padding:12px;background:#0050a0;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+      button:hover{background:#003d7a}
+      .error{background:#fff0f0;border:1px solid #f88;color:#c00;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:18px}
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="logo">🏠 Property Records Agent</div>
+      <div class="subtitle">Sign in to connect your property records account to ChatGPT</div>
+      ${error ? `<div class="error">${error}</div>` : ""}
+      <form method="POST" action="/oauth/authorize?${params}">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required autocomplete="username" placeholder="your@email.com">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="••••••••">
+        <button type="submit">Sign In &amp; Authorize</button>
+      </form>
+    </div>
+  </body>
+</html>`;
+
+
 
 const createPropertyRecordsMcpServer = () => {
   const server = new McpServer(
@@ -510,7 +574,15 @@ const readRequestBody = async (request: IncomingMessage) => {
     return undefined;
   }
 
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const body = Buffer.concat(chunks).toString("utf8");
+  const contentType = request.headers["content-type"] ?? "";
+  
+  if (contentType.includes("application/json")) {
+    return JSON.parse(body);
+  }
+  
+  // Return raw body for form data or other content types
+  return body;
 };
 
 const handleMcpRequest = async (request: IncomingMessage, response: ServerResponse) => {
@@ -537,13 +609,14 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
   }
 
   const body = await readRequestBody(request);
-  console.log(`[${new Date().toISOString()}] Request body:`, JSON.stringify(body, null, 2));
+  const parsedBody = typeof body === 'string' ? JSON.parse(body) : body;
+  console.log(`[${new Date().toISOString()}] Request body:`, JSON.stringify(parsedBody, null, 2));
 
-  if (body?.method === "initialize") {
+  if (parsedBody?.method === "initialize") {
     console.log(`[${new Date().toISOString()}] Handling initialize request`);
     const initResponse = {
       jsonrpc: "2.0",
-      id: body.id,
+      id: parsedBody.id,
       result: {
         protocolVersion: "2025-03-26",
         capabilities: {
@@ -559,7 +632,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
     return;
   }
 
-  if (body?.method === "tools/list") {
+  if (parsedBody?.method === "tools/list") {
     console.log(`[${new Date().toISOString()}] Handling tools/list request`);
     const tools = [
       {
@@ -637,14 +710,14 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
     return;
   }
 
-  console.log(`[${new Date().toISOString()}] Handling tool call request: ${body?.method}`);
+  console.log(`[${new Date().toISOString()}] Handling tool call request: ${parsedBody?.method}`);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined
   });
 
   try {
     await mcpServer.connect(transport);
-    await transport.handleRequest(request, response, body);
+    await transport.handleRequest(request, response, parsedBody);
     console.log(`[${new Date().toISOString()}] Request handled successfully`);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Error handling MCP request:`, error);
@@ -682,8 +755,7 @@ const startHttpServer = async () => {
         privacyPath: "/privacy", 
         authPath: "/auth",
         oauthAuthorizePath: "/oauth/authorize",
-        oauthTokenPath: "/oauth/token",
-        oauthRegisterPath: "/register"
+        oauthTokenPath: "/oauth/token"
       });
       return;
     }
@@ -696,7 +768,8 @@ const startHttpServer = async () => {
 
     if (url.pathname === "/auth/login" && request.method === "POST") {
       const body = await readRequestBody(request);
-      const { email, password } = body as { email: string; password: string };
+      const parsedBody = typeof body === 'string' ? JSON.parse(body) : body;
+      const { email, password } = parsedBody as { email: string; password: string };
 
       const result = await login({ email, password });
 
@@ -710,7 +783,8 @@ const startHttpServer = async () => {
 
     if (url.pathname === "/auth/register" && request.method === "POST") {
       const body = await readRequestBody(request);
-      const { email, password, full_name } = body as { email: string; password: string; full_name?: string };
+      const parsedBody = typeof body === 'string' ? JSON.parse(body) : body;
+      const { email, password, full_name } = parsedBody as { email: string; password: string; full_name?: string };
 
       const result = await register({ email, password, full_name });
 
@@ -723,62 +797,109 @@ const startHttpServer = async () => {
     }
 
     // OAuth 2.0 Authorization Endpoint
-    if (url.pathname === "/oauth/authorize" && request.method === "GET") {
+    if (url.pathname === "/oauth/authorize") {
       const client_id = url.searchParams.get('client_id');
       const redirect_uri = url.searchParams.get('redirect_uri');
       const response_type = url.searchParams.get('response_type');
-      const scope = url.searchParams.get('scope');
       const state = url.searchParams.get('state');
-      
-      // For demo purposes, we'll use the first user in the database
-      // In production, this would come from a login session
-      let userId = "demo-user-id";
-      let userEmail = "demo@example.com";
-      try {
-        const userResult = await pool.query('SELECT id, email FROM users LIMIT 1');
-        if (userResult.rows.length > 0) {
-          userId = userResult.rows[0].id;
-          userEmail = userResult.rows[0].email;
-        }
-      } catch (error) {
-        console.error('Error fetching user for OAuth:', error);
-      }
-      
-      try {
-        const authResponse = await handleOAuthAuthorization({
-          response_type: response_type || 'code',
-          client_id: client_id || 'demo-client',
-          redirect_uri: redirect_uri || 'http://localhost:3000/callback',
-          scope: scope || 'read',
-          state: state || undefined
-        }, userId, userEmail);
-        
-        // Redirect with authorization code
-        const redirectUrl = new URL(redirect_uri || 'http://localhost:3000/callback');
-        redirectUrl.searchParams.set('code', authResponse.code);
-        if (authResponse.state) {
-          redirectUrl.searchParams.set('state', authResponse.state);
-        }
-        
-        response.writeHead(302, { Location: redirectUrl.toString() });
-        response.end();
-        return;
-      } catch (error: any) {
-        writeJson(response, 400, { error: "Authorization failed", message: error.message });
+      const code_challenge = url.searchParams.get('code_challenge');
+      const code_challenge_method = url.searchParams.get('code_challenge_method');
+      const params = url.searchParams.toString();
+
+      const oauthClient = client_id ? await getRegisteredOauthClient(client_id) : null;
+
+      if (!oauthClient || response_type !== 'code') {
+        writeHtml(response, 400, oauthLoginPageHtml(params, 'Invalid client or response_type.'));
         return;
       }
+
+      if (oauthClient.redirect_uris && !oauthClient.redirect_uris.includes(redirect_uri)) {
+        writeHtml(response, 400, oauthLoginPageHtml(params, 'Invalid redirect_uri.'));
+        return;
+      }
+
+      if (request.method === 'GET') {
+        writeHtml(response, 200, oauthLoginPageHtml(params));
+        return;
+      }
+
+      // POST - process login form
+      const body = await readRequestBody(request);
+      console.log('OAuth authorize body:', body);
+      const formParams = parseRequestBodyFields(body || '', request);
+      console.log('OAuth authorize form params:', Array.from(formParams.entries()));
+      const email = formParams.get('email')?.toLowerCase() || '';
+      const password = formParams.get('password') || '';
+
+      if (!email || !password) {
+        writeHtml(response, 400, oauthLoginPageHtml(params, 'Email and password are required.'));
+        return;
+      }
+
+      // Validate credentials
+      const userResult = await pool.query(
+        'SELECT id, email, password_hash, is_active FROM users WHERE email = $1',
+        [email]
+      );
+
+      if (userResult.rows.length === 0) {
+        writeHtml(response, 401, oauthLoginPageHtml(params, 'Invalid email or password.'));
+        return;
+      }
+
+      const user = userResult.rows[0];
+      if (!user.is_active) {
+        writeHtml(response, 401, oauthLoginPageHtml(params, 'Account is deactivated.'));
+        return;
+      }
+
+      const isValidPassword = await bcrypt.compare(password, user.password_hash);
+      if (!isValidPassword) {
+        writeHtml(response, 401, oauthLoginPageHtml(params, 'Invalid email or password.'));
+        return;
+      }
+
+      // Issue authorization code
+      const code = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      
+      await pool.query(
+        `INSERT INTO oauth_codes (code, client_id, user_id, email, redirect_uri, code_challenge, code_challenge_method, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [code, oauthClient.client_id, user.id, user.email, redirect_uri, code_challenge, code_challenge_method, expiresAt]
+      );
+
+      const redirectUrl = new URL(redirect_uri || 'http://localhost:3000/callback');
+      redirectUrl.searchParams.set('code', code);
+      if (state) redirectUrl.searchParams.set('state', state);
+
+      response.writeHead(302, { Location: redirectUrl.toString() });
+      response.end();
+      return;
     }
 
     // OAuth 2.0 Token Endpoint
-    if (url.pathname === "/oauth/token" && request.method === "POST") {
+    if (url.pathname === "/oauth/token") {
+      setCorsHeaders(response);
+      
+      if (request.method === "OPTIONS") {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+
+      if (request.method !== "POST") {
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+
       const body = await readRequestBody(request);
-      const { grant_type, code, redirect_uri, client_id, client_secret } = body as {
-        grant_type: string;
-        code: string;
-        redirect_uri: string;
-        client_id: string;
-        client_secret?: string;
-      };
+      const bodyFields = parseRequestBodyFields(body || '', request);
+      const grant_type = bodyFields.get('grant_type') || '';
+      const code = bodyFields.get('code') || '';
+      const redirect_uri = bodyFields.get('redirect_uri') || '';
+      const client_id = bodyFields.get('client_id') || '';
+      const client_secret = bodyFields.get('client_secret') || '';
 
       try {
         const tokenResponse = await handleOAuthToken({
@@ -804,7 +925,6 @@ const startHttpServer = async () => {
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
         token_endpoint: `${baseUrl}/oauth/token`,
-        registration_endpoint: `${baseUrl}/register`,
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256", "plain"],
@@ -813,92 +933,9 @@ const startHttpServer = async () => {
       return;
     }
 
-    // OpenID Configuration Endpoint
-    if (url.pathname === "/.well-known/openid-configuration") {
-      const baseUrl = process.env.BASE_URL || `http://${request.headers.host}`;
-      writeJson(response, 200, {
-        issuer: baseUrl,
-        authorization_endpoint: `${baseUrl}/oauth/authorize`,
-        token_endpoint: `${baseUrl}/oauth/token`,
-        registration_endpoint: `${baseUrl}/register`,
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token"],
-        code_challenge_methods_supported: ["S256", "plain"],
-        token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
-        scopes_supported: ["openid", "profile", "email"],
-        subject_types_supported: ["public"],
-        id_token_signing_alg_values_supported: ["RS256", "HS256"]
-      });
-      return;
-    }
 
-    // OAuth Registration Endpoint (for dynamic client registration)
-    if (url.pathname === "/register") {
-      // Set CORS headers
-      response.setHeader('Access-Control-Allow-Origin', '*');
-      response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-      response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-      if (request.method === "OPTIONS") {
-        response.writeHead(204);
-        response.end();
-        return;
-      }
 
-      if (request.method !== "POST") {
-        writeJson(response, 405, { error: "method_not_allowed" });
-        return;
-      }
-
-      const body = await readRequestBody(request);
-      const { redirect_uris, client_name, token_endpoint_auth_method, grant_types, response_types } = body as {
-        redirect_uris?: string[];
-        client_name?: string;
-        token_endpoint_auth_method?: string;
-        grant_types?: string[];
-        response_types?: string[];
-      };
-
-      if (!redirect_uris || redirect_uris.length === 0) {
-        writeJson(response, 400, { error: "invalid_client_metadata", error_description: "redirect_uris is required." });
-        return;
-      }
-
-      const clientId = crypto.randomBytes(16).toString('hex');
-      const clientSecret = crypto.randomBytes(32).toString('hex');
-      const name = client_name || 'MCP Client';
-      const authMethod = token_endpoint_auth_method || 'none';
-      const grants = grant_types || ['authorization_code', 'refresh_token'];
-      const responses = response_types || ['code'];
-
-      await pool.query(
-        `INSERT INTO oauth_clients
-          (client_id, client_secret, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method)
-         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)`,
-        [
-          clientId,
-          clientSecret,
-          name,
-          JSON.stringify(redirect_uris),
-          JSON.stringify(grants),
-          JSON.stringify(responses),
-          authMethod
-        ]
-      );
-
-      writeJson(response, 201, {
-        client_id: clientId,
-        client_secret: clientSecret,
-        client_id_issued_at: Math.floor(Date.now() / 1000),
-        client_secret_expires_at: 0,
-        redirect_uris: redirect_uris,
-        grant_types: grants,
-        response_types: responses,
-        token_endpoint_auth_method: authMethod,
-        client_name: name
-      });
-      return;
-    }
 
     if (url.pathname === "/mcp") {
       await handleMcpRequest(request, response);
@@ -913,8 +950,7 @@ const startHttpServer = async () => {
       privacyPath: "/privacy", 
       authPath: "/auth",
       oauthAuthorizePath: "/oauth/authorize",
-      oauthTokenPath: "/oauth/token",
-      oauthRegisterPath: "/register"
+      oauthTokenPath: "/oauth/token"
     });
   }).listen(port, "0.0.0.0", () => {
     console.log(`[${new Date().toISOString()}] Property Records MCP HTTP server listening on port ${port}; endpoint: /mcp`);

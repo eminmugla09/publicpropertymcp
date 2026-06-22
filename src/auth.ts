@@ -90,6 +90,8 @@ export const ensureOAuthClient = async () => {
   }
 };
 
+export { getRegisteredOauthClient };
+
 export interface User {
   id: string;
   email: string;
