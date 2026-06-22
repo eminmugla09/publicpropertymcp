@@ -833,7 +833,23 @@ const startHttpServer = async () => {
     }
 
     // OAuth Registration Endpoint (for dynamic client registration)
-    if (url.pathname === "/register" && request.method === "POST") {
+    if (url.pathname === "/register") {
+      // Set CORS headers
+      response.setHeader('Access-Control-Allow-Origin', '*');
+      response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+      if (request.method === "OPTIONS") {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+
+      if (request.method !== "POST") {
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+
       const body = await readRequestBody(request);
       const { redirect_uris, client_name, token_endpoint_auth_method, grant_types, response_types } = body as {
         redirect_uris?: string[];
