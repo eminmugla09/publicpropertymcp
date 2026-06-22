@@ -3,8 +3,8 @@
 
 -- Insert sample users
 INSERT INTO users (email, password_hash, full_name) VALUES
-  ('rjvargas87@gmail.com', '$2b$10$placeholder_hash_for_demo', 'Rafael Vargas'),
-  ('woarzus@gmail.com', '$2b$10$placeholder_hash_for_demo', 'Emin Mugla')
+  ('rjvargas87@gmail.com', '$2b$10$QGJwQAV6gsxC07uvxykOJOAo50PnPaE9VUUPtcf50cr5Z9L2x9Eb6', 'Rafael Vargas'),
+  ('woarzus@gmail.com', '$2b$10$QGJwQAV6gsxC07uvxykOJOAo50PnPaE9VUUPtcf50cr5Z9L2x9Eb6', 'Emin Mugla')
 ON CONFLICT (email) DO NOTHING;
 
 -- Get user IDs for property records

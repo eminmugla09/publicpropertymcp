@@ -368,6 +368,45 @@ const createOAuthEndpoint = (request: IncomingMessage, path: string) => {
   return `https://${host}${path}`;
 };
 
+const writeOAuthMetadata = (request: IncomingMessage, response: ServerResponse) => {
+  const baseUrl = createOAuthEndpoint(request, "");
+  writeJson(response, 200, {
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    token_endpoint: `${baseUrl}/oauth/token`,
+    registration_endpoint: `${baseUrl}/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    code_challenge_methods_supported: ["S256", "plain"],
+    token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"]
+  });
+};
+
+const writeOpenIdConfiguration = (request: IncomingMessage, response: ServerResponse) => {
+  const baseUrl = createOAuthEndpoint(request, "");
+  writeJson(response, 200, {
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    token_endpoint: `${baseUrl}/oauth/token`,
+    registration_endpoint: `${baseUrl}/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    code_challenge_methods_supported: ["S256", "plain"],
+    token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
+    scopes_supported: ["openid", "profile", "email"],
+    subject_types_supported: ["public"],
+    id_token_signing_alg_values_supported: ["RS256", "HS256"]
+  });
+};
+
+const writeOAuthProtectedResource = (request: IncomingMessage, response: ServerResponse) => {
+  const baseUrl = createOAuthEndpoint(request, "");
+  writeJson(response, 200, {
+    resource: `${baseUrl}/mcp`,
+    authorization_servers: [baseUrl]
+  });
+};
+
 const parseRequestBodyFields = (raw: unknown, request: IncomingMessage) => {
   const contentType = request.headers["content-type"] ?? "";
   if (contentType.includes("application/x-www-form-urlencoded")) {
@@ -615,6 +654,22 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
 
   const body = await readRequestBody(request);
   const parsedBody = typeof body === 'string' ? JSON.parse(body) : body;
+
+  if (!parsedBody || typeof parsedBody !== 'object') {
+    console.log(`[${new Date().toISOString()}] Empty MCP request body received`);
+    if (!response.headersSent) {
+      writeJson(response, 400, {
+        jsonrpc: "2.0",
+        error: {
+          code: -32700,
+          message: "Parse error: request body is empty or invalid"
+        },
+        id: null
+      });
+    }
+    return;
+  }
+
   console.log(`[${new Date().toISOString()}] Request body:`, JSON.stringify(parsedBody, null, 2));
 
   if (parsedBody?.method === "initialize") {
@@ -708,7 +763,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
 
     const toolsResponse = {
       jsonrpc: "2.0",
-      id: body.id,
+      id: parsedBody.id,
       result: { tools }
     };
     writeHtml(response, 200, `event: message\ndata: ${JSON.stringify(toolsResponse)}\n\n`);
@@ -924,37 +979,36 @@ const startHttpServer = async () => {
     }
 
     // OAuth 2.0 Metadata Endpoint (for ChatGPT discovery)
-    if (url.pathname === "/.well-known/oauth-authorization-server") {
-      const baseUrl = createOAuthEndpoint(request, "");
-      writeJson(response, 200, {
-        issuer: baseUrl,
-        authorization_endpoint: `${baseUrl}/oauth/authorize`,
-        token_endpoint: `${baseUrl}/oauth/token`,
-        registration_endpoint: `${baseUrl}/register`,
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token"],
-        code_challenge_methods_supported: ["S256", "plain"],
-        token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"]
-      });
+    if (url.pathname === "/.well-known/oauth-authorization-server" || url.pathname === "/.well-known/oauth-authorization-server/mcp") {
+      writeOAuthMetadata(request, response);
       return;
     }
 
     // OpenID Configuration Endpoint
-    if (url.pathname === "/.well-known/openid-configuration") {
-      const baseUrl = createOAuthEndpoint(request, "");
-      writeJson(response, 200, {
-        issuer: baseUrl,
-        authorization_endpoint: `${baseUrl}/oauth/authorize`,
-        token_endpoint: `${baseUrl}/oauth/token`,
-        registration_endpoint: `${baseUrl}/register`,
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token"],
-        code_challenge_methods_supported: ["S256", "plain"],
-        token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
-        scopes_supported: ["openid", "profile", "email"],
-        subject_types_supported: ["public"],
-        id_token_signing_alg_values_supported: ["RS256", "HS256"]
-      });
+    if (url.pathname === "/.well-known/openid-configuration" || url.pathname === "/.well-known/openid-configuration/mcp") {
+      writeOpenIdConfiguration(request, response);
+      return;
+    }
+
+    // OAuth Protected Resource Discovery (RFC 9728)
+    if (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp") {
+      writeOAuthProtectedResource(request, response);
+      return;
+    }
+
+    // Alternative well-known paths under /mcp
+    if (url.pathname === "/mcp/.well-known/oauth-authorization-server") {
+      writeOAuthMetadata(request, response);
+      return;
+    }
+
+    if (url.pathname === "/mcp/.well-known/openid-configuration") {
+      writeOpenIdConfiguration(request, response);
+      return;
+    }
+
+    if (url.pathname === "/mcp/.well-known/oauth-protected-resource") {
+      writeOAuthProtectedResource(request, response);
       return;
     }
 
