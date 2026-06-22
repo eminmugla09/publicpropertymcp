@@ -770,6 +770,52 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
     return;
   }
 
+  // Authenticate tool calls (OAuth access token is a JWT)
+  if (parsedBody?.method === "tools/call") {
+    const authHeader = request.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      console.log(`[${new Date().toISOString()}] MCP tool call missing Authorization header`);
+      writeJson(response, 401, {
+        jsonrpc: "2.0",
+        error: {
+          code: -32001,
+          message: "Authentication required. Provide a valid OAuth access token in the Authorization header."
+        },
+        id: parsedBody.id
+      });
+      return;
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = verifyToken(token);
+    if (!decoded.valid || !decoded.userId) {
+      console.log(`[${new Date().toISOString()}] MCP tool call invalid token`);
+      writeJson(response, 401, {
+        jsonrpc: "2.0",
+        error: {
+          code: -32001,
+          message: "Invalid or expired access token."
+        },
+        id: parsedBody.id
+      });
+      return;
+    }
+
+    // Inject user email for scoped tools when not provided
+    const toolName = typeof parsedBody?.params?.name === "string" ? parsedBody.params.name : "";
+    const scopedTools = ["search_properties_by_owner", "get_recent_property_events", "match_property_to_customer"];
+    if (scopedTools.includes(toolName) && decoded.email) {
+      if (!parsedBody.params.arguments || typeof parsedBody.params.arguments !== "object") {
+        parsedBody.params.arguments = {};
+      }
+      const args = parsedBody.params.arguments as Record<string, unknown>;
+      if (!args.email) {
+        args.email = decoded.email;
+        console.log(`[${new Date().toISOString()}] Injected user email ${decoded.email} into ${toolName}`);
+      }
+    }
+  }
+
   console.log(`[${new Date().toISOString()}] Handling tool call request: ${parsedBody?.method}`);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined
@@ -960,6 +1006,7 @@ const startHttpServer = async () => {
       const redirect_uri = bodyFields.get('redirect_uri') || '';
       const client_id = bodyFields.get('client_id') || '';
       const client_secret = bodyFields.get('client_secret') || '';
+      const code_verifier = bodyFields.get('code_verifier') || '';
 
       try {
         const tokenResponse = await handleOAuthToken({
@@ -967,7 +1014,8 @@ const startHttpServer = async () => {
           code,
           redirect_uri,
           client_id,
-          client_secret
+          client_secret,
+          code_verifier
         });
         
         writeJson(response, 200, tokenResponse);

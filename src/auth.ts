@@ -283,6 +283,7 @@ export interface OAuthTokenRequest {
   redirect_uri: string;
   client_id: string;
   client_secret?: string;
+  code_verifier?: string;
   scope?: string;
 }
 
@@ -362,11 +363,23 @@ export async function handleOAuthToken(
     throw new Error('Authorization code client mismatch');
   }
   
+  if (row.code_challenge && request.code_verifier) {
+    const challenge = row.code_challenge_method === 'S256'
+      ? crypto.createHash('sha256').update(request.code_verifier).digest('base64url')
+      : request.code_verifier;
+    if (challenge !== row.code_challenge) {
+      throw new Error('PKCE verification failed');
+    }
+  }
+  
   await pool.query('UPDATE oauth_codes SET used = TRUE WHERE code = $1', [code]);
   
-  const access_token = crypto.randomBytes(32).toString('hex');
+  const access_token = jwt.sign(
+    { userId: row.user_id, email: row.email },
+    JWT_SECRET,
+    { expiresIn: '1y' }
+  );
   const refresh_token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
   const refreshExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
   
   await pool.query(
@@ -378,7 +391,7 @@ export async function handleOAuthToken(
   return {
     access_token,
     token_type: 'Bearer',
-    expires_in: 3600,
+    expires_in: 31536000,
     scope: request.scope || 'read'
   };
 }
