@@ -363,6 +363,11 @@ const setCorsHeaders = (response: ServerResponse) => {
   response.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, mcp-session-id');
 };
 
+const createOAuthEndpoint = (request: IncomingMessage, path: string) => {
+  const host = request.headers.host ?? "localhost";
+  return `https://${host}${path}`;
+};
+
 const parseRequestBodyFields = (raw: unknown, request: IncomingMessage) => {
   const contentType = request.headers["content-type"] ?? "";
   if (contentType.includes("application/x-www-form-urlencoded")) {
@@ -920,7 +925,7 @@ const startHttpServer = async () => {
 
     // OAuth 2.0 Metadata Endpoint (for ChatGPT discovery)
     if (url.pathname === "/.well-known/oauth-authorization-server") {
-      const baseUrl = process.env.BASE_URL || `http://${request.headers.host}`;
+      const baseUrl = createOAuthEndpoint(request, "");
       writeJson(response, 200, {
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
@@ -936,7 +941,7 @@ const startHttpServer = async () => {
 
     // OpenID Configuration Endpoint
     if (url.pathname === "/.well-known/openid-configuration") {
-      const baseUrl = process.env.BASE_URL || `http://${request.headers.host}`;
+      const baseUrl = createOAuthEndpoint(request, "");
       writeJson(response, 200, {
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
