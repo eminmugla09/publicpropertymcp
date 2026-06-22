@@ -40,7 +40,22 @@ const pool = new Pool({
 });
 
 // OAuth 2.0 database storage
+const getConfiguredClient = () => ({
+  client_id: OAUTH_CLIENT_ID,
+  client_secret: OAUTH_CLIENT_SECRET || null,
+  client_name: "Property Records MCP",
+  redirect_uris: [] as string[],
+  grant_types: ["authorization_code", "refresh_token"],
+  response_types: ["code"],
+  token_endpoint_auth_method: OAUTH_CLIENT_SECRET ? "client_secret_post" : "none"
+});
+
 const getRegisteredOauthClient = async (clientId: string) => {
+  // Return pre-configured client if it matches
+  if (clientId === OAUTH_CLIENT_ID) {
+    return getConfiguredClient();
+  }
+
   try {
     const result = await pool.query(
       'SELECT client_id, client_secret, redirect_uris, grant_types, response_types, token_endpoint_auth_method FROM oauth_clients WHERE client_id = $1',
@@ -90,7 +105,7 @@ export const ensureOAuthClient = async () => {
   }
 };
 
-export { getRegisteredOauthClient };
+export { getRegisteredOauthClient, getConfiguredClient };
 
 export interface User {
   id: string;

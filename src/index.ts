@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { Pool } from 'pg';
-import { register, login, verifyToken, handleOAuthToken, ensureOAuthClient, getRegisteredOauthClient } from './auth.js';
+import { register, login, verifyToken, handleOAuthToken, ensureOAuthClient, getRegisteredOauthClient, getConfiguredClient } from './auth.js';
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
@@ -813,7 +813,8 @@ const startHttpServer = async () => {
         return;
       }
 
-      if (oauthClient.redirect_uris && !oauthClient.redirect_uris.includes(redirect_uri)) {
+      // Only validate redirect_uri if the client has configured redirect_uris
+      if (oauthClient.redirect_uris && oauthClient.redirect_uris.length > 0 && !oauthClient.redirect_uris.includes(redirect_uri)) {
         writeHtml(response, 400, oauthLoginPageHtml(params, 'Invalid redirect_uri.'));
         return;
       }
