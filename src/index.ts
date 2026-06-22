@@ -270,9 +270,10 @@ const matchPropertyToCustomer = async (input: {
 };
 
 const getPropertyRecordByAddress = async (address: string) => {
+  // Split before normalization so commas are preserved
+  const streetPartRaw = address.split(',')[0].trim();
   const normalized = normalizeAddress(address);
-  // Use the portion before the first comma as the street address for flexible matching
-  const streetPart = normalized.split(',')[0].trim();
+  const streetPart = normalizeAddress(streetPartRaw);
   const fullPattern = `%${normalized}%`;
   const streetPattern = `%${streetPart}%`;
 
