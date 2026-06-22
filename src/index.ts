@@ -356,6 +356,16 @@ const writeHtml = (response: ServerResponse, statusCode: number, html: string) =
   response.end(html);
 };
 
+const writeSse = (response: ServerResponse, statusCode: number, data: string) => {
+  response.setHeader("Access-Control-Allow-Origin", "*");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, mcp-session-id, Authorization");
+  response.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id, mcp-session-id");
+  response.writeHead(statusCode, { "Content-Type": "text/event-stream" });
+  response.write(data);
+  response.end();
+};
+
 const setCorsHeaders = (response: ServerResponse) => {
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -656,21 +666,10 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
   const parsedBody = typeof body === 'string' ? JSON.parse(body) : body;
 
   if (!parsedBody || typeof parsedBody !== 'object') {
-    console.log(`[${new Date().toISOString()}] Empty MCP request body received`);
-    if (!response.headersSent) {
-      writeJson(response, 400, {
-        jsonrpc: "2.0",
-        error: {
-          code: -32700,
-          message: "Parse error: request body is empty or invalid"
-        },
-        id: null
-      });
-    }
-    return;
+    console.log(`[${new Date().toISOString()}] Empty or non-JSON MCP request body received; passing to transport`);
+  } else {
+    console.log(`[${new Date().toISOString()}] Request body:`, JSON.stringify(parsedBody, null, 2));
   }
-
-  console.log(`[${new Date().toISOString()}] Request body:`, JSON.stringify(parsedBody, null, 2));
 
   if (parsedBody?.method === "initialize") {
     console.log(`[${new Date().toISOString()}] Handling initialize request`);
@@ -688,7 +687,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
         }
       }
     };
-    writeHtml(response, 200, `event: message\ndata: ${JSON.stringify(initResponse)}\n\n`);
+    writeSse(response, 200, `event: message\ndata: ${JSON.stringify(initResponse)}\n\n`);
     return;
   }
 
@@ -766,7 +765,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       id: parsedBody.id,
       result: { tools }
     };
-    writeHtml(response, 200, `event: message\ndata: ${JSON.stringify(toolsResponse)}\n\n`);
+    writeSse(response, 200, `event: message\ndata: ${JSON.stringify(toolsResponse)}\n\n`);
     return;
   }
 
