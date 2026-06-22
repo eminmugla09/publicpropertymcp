@@ -804,20 +804,6 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       });
       return;
     }
-
-    // Inject user email for scoped tools when not provided
-    const toolName = typeof parsedBody?.params?.name === "string" ? parsedBody.params.name : "";
-    const scopedTools = ["search_properties_by_owner", "get_recent_property_events", "match_property_to_customer"];
-    if (scopedTools.includes(toolName) && decoded.email) {
-      if (!parsedBody.params.arguments || typeof parsedBody.params.arguments !== "object") {
-        parsedBody.params.arguments = {};
-      }
-      const args = parsedBody.params.arguments as Record<string, unknown>;
-      if (!args.email) {
-        args.email = decoded.email;
-        console.log(`[${new Date().toISOString()}] Injected user email ${decoded.email} into ${toolName}`);
-      }
-    }
   }
 
   console.log(`[${new Date().toISOString()}] Handling tool call request: ${parsedBody?.method}`);
