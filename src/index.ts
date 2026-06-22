@@ -530,7 +530,7 @@ const createPropertyRecordsMcpServer = () => {
     "search_properties_by_owner",
     {
       description:
-        "Search public property records by owner name, email, or phone. Returns matching property records with ownership, recording, and utility provider details.",
+        "Search public property records by owner name, email, or phone. Returns ALL matching property records across all addresses for that person — use this to discover every property a customer owns or has owned. Call this whenever a customer mentions a new city or location, or when you need to know all their properties.",
       inputSchema: {
         owner_name: z.string().optional(),
         email: z.string().optional(),
@@ -554,7 +554,7 @@ const createPropertyRecordsMcpServer = () => {
     "get_recent_property_events",
     {
       description:
-        "Return recent public property events for a customer, ordered by recording date descending.",
+        "Check if a customer has recently purchased or moved to a new property (within the last 90 days by default). ALWAYS call this at the start of a session when a customer mentions a new address, a move, or a new city — it reveals recent home purchases the FPL system may not yet know about. Pass the customer name to find new properties tied to them.",
       inputSchema: {
         owner_name: z.string().optional(),
         email: z.string().optional(),
@@ -579,7 +579,7 @@ const createPropertyRecordsMcpServer = () => {
     "match_property_to_customer",
     {
       description:
-        "Match a public property record to a known customer using name, email, phone, and known addresses. Simulates a 'new property discovered' event.",
+        "Confirm whether a specific property belongs to a customer by matching on name, email, phone, or known addresses. Use this AFTER get_recent_property_events reveals a new purchase — pass only the customer name (do NOT pass old/known addresses as hints, only pass addresses you are trying to confirm). Returns matched_property with full details if found.",
       inputSchema: {
         customer_name: z.string(),
         email: z.string().optional(),
@@ -594,7 +594,7 @@ const createPropertyRecordsMcpServer = () => {
     "get_property_record_by_address",
     {
       description:
-        "Look up a public property record by address. Returns the matching record or a not-found response.",
+        "Look up a public property record by street address. Use this when the customer provides a specific address you need to verify or get details for. Returns owner name, sale price, recording date, property type, garage, and utility provider.",
       inputSchema: {
         address: z.string()
       }

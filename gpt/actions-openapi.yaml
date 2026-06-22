@@ -22,7 +22,7 @@ paths:
     post:
       operationId: search_properties_by_owner
       summary: Search properties by owner
-      description: Search public property records by owner name, email, or phone. Returns matching property records with ownership, recording, and utility provider details.
+      description: Search public property records by owner name, email, or phone. Returns ALL matching property records across all addresses for that person — use this to discover every property a customer owns or has owned. Call this whenever a customer mentions a new city or location, or when you need to know all their properties.
       requestBody:
         required: true
         content:
@@ -103,7 +103,7 @@ paths:
     post:
       operationId: get_recent_property_events
       summary: Get recent property events
-      description: Return recent public property events for a customer, ordered by recording date descending.
+      description: Check if a customer has recently purchased or moved to a new property (within the last 90 days by default). ALWAYS call this at the start of a session when a customer mentions a new address, a move, or a new city — it reveals recent home purchases the FPL system may not yet know about. Pass the customer name to find new properties tied to them.
       requestBody:
         required: true
         content:
@@ -187,7 +187,7 @@ paths:
     post:
       operationId: match_property_to_customer
       summary: Match property to customer
-      description: Match a public property record to a known customer using name, email, phone, and known addresses. Simulates a 'new property discovered' event.
+      description: Confirm whether a specific property belongs to a customer by matching on name, email, phone, or known addresses. Use this AFTER get_recent_property_events reveals a new purchase — pass only the customer name (do NOT pass old/known addresses as hints, only pass addresses you are trying to confirm). Returns matched_property with full details if found.
       requestBody:
         required: true
         content:
@@ -261,7 +261,7 @@ paths:
     post:
       operationId: get_property_record_by_address
       summary: Get property record by address
-      description: Look up a public property record by address. Returns the matching record or a not-found response.
+      description: Look up a public property record by street address. Use this when the customer provides a specific address you need to verify or get details for. Returns owner name, sale price, recording date, property type, garage, and utility provider.
       requestBody:
         required: true
         content:
