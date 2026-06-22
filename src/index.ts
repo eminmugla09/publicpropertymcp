@@ -7,6 +7,7 @@ import { Pool } from 'pg';
 import { register, login, verifyToken, handleOAuthAuthorization, handleOAuthToken, ensureOAuthClient } from './auth.js';
 import express from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 
 const getDatabaseUrl = () => {
   const rawUrl = process.env.DATABASE_URL ?? '';
@@ -681,7 +682,8 @@ const startHttpServer = async () => {
         privacyPath: "/privacy", 
         authPath: "/auth",
         oauthAuthorizePath: "/oauth/authorize",
-        oauthTokenPath: "/oauth/token"
+        oauthTokenPath: "/oauth/token",
+        oauthRegisterPath: "/register"
       });
       return;
     }
@@ -802,10 +804,82 @@ const startHttpServer = async () => {
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
         token_endpoint: `${baseUrl}/oauth/token`,
+        registration_endpoint: `${baseUrl}/register`,
         response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code"],
-        token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
-        code_challenge_methods_supported: ["S256", "plain"]
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256", "plain"],
+        token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"]
+      });
+      return;
+    }
+
+    // OpenID Configuration Endpoint
+    if (url.pathname === "/.well-known/openid-configuration") {
+      const baseUrl = process.env.BASE_URL || `http://${request.headers.host}`;
+      writeJson(response, 200, {
+        issuer: baseUrl,
+        authorization_endpoint: `${baseUrl}/oauth/authorize`,
+        token_endpoint: `${baseUrl}/oauth/token`,
+        registration_endpoint: `${baseUrl}/register`,
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256", "plain"],
+        token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
+        scopes_supported: ["openid", "profile", "email"],
+        subject_types_supported: ["public"],
+        id_token_signing_alg_values_supported: ["RS256", "HS256"]
+      });
+      return;
+    }
+
+    // OAuth Registration Endpoint (for dynamic client registration)
+    if (url.pathname === "/register" && request.method === "POST") {
+      const body = await readRequestBody(request);
+      const { redirect_uris, client_name, token_endpoint_auth_method, grant_types, response_types } = body as {
+        redirect_uris?: string[];
+        client_name?: string;
+        token_endpoint_auth_method?: string;
+        grant_types?: string[];
+        response_types?: string[];
+      };
+
+      if (!redirect_uris || redirect_uris.length === 0) {
+        writeJson(response, 400, { error: "invalid_client_metadata", error_description: "redirect_uris is required." });
+        return;
+      }
+
+      const clientId = crypto.randomBytes(16).toString('hex');
+      const clientSecret = crypto.randomBytes(32).toString('hex');
+      const name = client_name || 'MCP Client';
+      const authMethod = token_endpoint_auth_method || 'none';
+      const grants = grant_types || ['authorization_code', 'refresh_token'];
+      const responses = response_types || ['code'];
+
+      await pool.query(
+        `INSERT INTO oauth_clients
+          (client_id, client_secret, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method)
+         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)`,
+        [
+          clientId,
+          clientSecret,
+          name,
+          JSON.stringify(redirect_uris),
+          JSON.stringify(grants),
+          JSON.stringify(responses),
+          authMethod
+        ]
+      );
+
+      writeJson(response, 201, {
+        client_id: clientId,
+        client_secret: clientSecret,
+        client_id_issued_at: Math.floor(Date.now() / 1000),
+        client_secret_expires_at: 0,
+        redirect_uris: redirect_uris,
+        grant_types: grants,
+        response_types: responses,
+        token_endpoint_auth_method: authMethod,
+        client_name: name
       });
       return;
     }
@@ -823,7 +897,8 @@ const startHttpServer = async () => {
       privacyPath: "/privacy", 
       authPath: "/auth",
       oauthAuthorizePath: "/oauth/authorize",
-      oauthTokenPath: "/oauth/token"
+      oauthTokenPath: "/oauth/token",
+      oauthRegisterPath: "/register"
     });
   }).listen(port, "0.0.0.0", () => {
     console.log(`[${new Date().toISOString()}] Property Records MCP HTTP server listening on port ${port}; endpoint: /mcp`);
