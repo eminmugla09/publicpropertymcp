@@ -70,8 +70,11 @@ const searchProperties = async (filters: {
   }
 
   if (filters.owner_name) {
-    conditions.push(`(lower(owner_name) LIKE lower($${paramIndex++}) OR lower(owner_name) = lower($${paramIndex++}))`);
-    params.push(`%${filters.owner_name}%`, filters.owner_name);
+    conditions.push(`(
+      lower(owner_name) LIKE lower($${paramIndex++}) OR
+      exists (select 1 from unnest(alternate_names) alt where lower(alt) LIKE lower($${paramIndex++}))
+    )`);
+    params.push(`%${filters.owner_name}%`, `%${filters.owner_name}%`);
   }
 
   if (filters.email) {
@@ -131,8 +134,11 @@ const getRecentPropertyEvents = async (filters: {
   params.push(cutoff);
 
   if (filters.owner_name) {
-    conditions.push(`(lower(owner_name) LIKE lower($${paramIndex++}) OR lower(owner_name) = lower($${paramIndex++}))`);
-    params.push(`%${filters.owner_name}%`, filters.owner_name);
+    conditions.push(`(
+      lower(owner_name) LIKE lower($${paramIndex++}) OR
+      exists (select 1 from unnest(alternate_names) alt where lower(alt) LIKE lower($${paramIndex++}))
+    )`);
+    params.push(`%${filters.owner_name}%`, `%${filters.owner_name}%`);
   }
 
   if (filters.email) {
@@ -177,8 +183,11 @@ const matchPropertyToCustomer = async (input: {
   }
 
   if (customer_name) {
-    conditions.push(`(lower(owner_name) LIKE lower($${paramIndex++}) OR lower(owner_name) = lower($${paramIndex++}))`);
-    params.push(`%${customer_name}%`, customer_name);
+    conditions.push(`(
+      lower(owner_name) LIKE lower($${paramIndex++}) OR
+      exists (select 1 from unnest(alternate_names) alt where lower(alt) LIKE lower($${paramIndex++}))
+    )`);
+    params.push(`%${customer_name}%`, `%${customer_name}%`);
   }
 
   if (email) {
