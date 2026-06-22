@@ -271,18 +271,18 @@ const matchPropertyToCustomer = async (input: {
 
 const getPropertyRecordByAddress = async (address: string) => {
   const normalized = normalizeAddress(address);
+  const pattern = `%${normalized}%`;
 
   const query = `
     SELECT * FROM property_records
     WHERE (
       lower(address) LIKE lower($1) OR
-      lower($2) LIKE lower(address) OR
-      lower(address || ', ' || city || ', ' || state || ' ' || zip) LIKE lower($3)
+      lower(address || ' ' || city || ' ' || state || ' ' || zip) LIKE lower($1)
     )
     LIMIT 1
   `;
 
-  const result = await pool.query(query, [`%${normalized}%`, normalized, `%${normalized}%`]);
+  const result = await pool.query(query, [pattern]);
   return result.rows[0] || null;
 };
 
