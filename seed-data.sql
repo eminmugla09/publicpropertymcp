@@ -88,7 +88,7 @@ BEGIN
   (
     emin_id,
     'Emin Mugla',
-    ARRAY['E. Mugla'],
+    ARRAY['E. Mugla', 'E.M.'],
     'woarzus@gmail.com',
     '954-666-2333',
     '1450 Brickell Bay Dr, Apt 1402',
@@ -115,7 +115,7 @@ BEGIN
   (
     emin_id,
     'Emin Mugla',
-    ARRAY['E. Mugla'],
+    ARRAY['E. Mugla', 'E.M.'],
     'woarzus@gmail.com',
     '954-666-2333',
     '320 Anchorage Dr',
