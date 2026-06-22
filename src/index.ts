@@ -755,7 +755,8 @@ const startHttpServer = async () => {
         privacyPath: "/privacy", 
         authPath: "/auth",
         oauthAuthorizePath: "/oauth/authorize",
-        oauthTokenPath: "/oauth/token"
+        oauthTokenPath: "/oauth/token",
+        oauthRegisterPath: "/register"
       });
       return;
     }
@@ -826,9 +827,7 @@ const startHttpServer = async () => {
 
       // POST - process login form
       const body = await readRequestBody(request);
-      console.log('OAuth authorize body:', body);
       const formParams = parseRequestBodyFields(body || '', request);
-      console.log('OAuth authorize form params:', Array.from(formParams.entries()));
       const email = formParams.get('email')?.toLowerCase() || '';
       const password = formParams.get('password') || '';
 
@@ -926,6 +925,7 @@ const startHttpServer = async () => {
         issuer: baseUrl,
         authorization_endpoint: `${baseUrl}/oauth/authorize`,
         token_endpoint: `${baseUrl}/oauth/token`,
+        registration_endpoint: `${baseUrl}/register`,
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256", "plain"],
@@ -934,9 +934,103 @@ const startHttpServer = async () => {
       return;
     }
 
+    // OpenID Configuration Endpoint
+    if (url.pathname === "/.well-known/openid-configuration") {
+      const baseUrl = process.env.BASE_URL || `http://${request.headers.host}`;
+      writeJson(response, 200, {
+        issuer: baseUrl,
+        authorization_endpoint: `${baseUrl}/oauth/authorize`,
+        token_endpoint: `${baseUrl}/oauth/token`,
+        registration_endpoint: `${baseUrl}/register`,
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256", "plain"],
+        token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
+        scopes_supported: ["openid", "profile", "email"],
+        subject_types_supported: ["public"],
+        id_token_signing_alg_values_supported: ["RS256", "HS256"]
+      });
+      return;
+    }
 
+    // OAuth Registration Endpoint (RFC 7591 Dynamic Client Registration)
+    if (url.pathname === "/register") {
+      setCorsHeaders(response);
 
+      if (request.method === "OPTIONS") {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
 
+      if (request.method !== "POST") {
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+
+      const body = await readRequestBody(request);
+      const rawBody = (typeof body === 'string' ? parseRequestBodyFields(body, request) : null) || (body || {}) as Record<string, unknown>;
+
+      const getArrayField = (fieldName: string): string[] => {
+        if (rawBody instanceof URLSearchParams) {
+          const value = rawBody.get(fieldName);
+          return value ? JSON.parse(value) : [];
+        }
+        const value = rawBody[fieldName];
+        return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+      };
+
+      const getStringField = (fieldName: string, defaultValue: string): string => {
+        if (rawBody instanceof URLSearchParams) {
+          return rawBody.get(fieldName) || defaultValue;
+        }
+        const value = rawBody[fieldName];
+        return typeof value === 'string' ? value : defaultValue;
+      };
+
+      const redirectUris = getArrayField('redirect_uris');
+      if (redirectUris.length === 0) {
+        writeJson(response, 400, { error: "invalid_client_metadata", error_description: "redirect_uris is required." });
+        return;
+      }
+
+      const tokenEndpointAuthMethod = getStringField('token_endpoint_auth_method', 'none');
+      const clientId = `mcp-client-${crypto.randomBytes(16).toString('hex')}`;
+      const clientSecret = `RT-${crypto.randomBytes(32).toString('hex')}-${crypto.randomBytes(16).toString('hex')}`;
+      const clientName = getStringField('client_name', 'MCP Client');
+      const grantTypes = getArrayField('grant_types');
+      const responseTypes = getArrayField('response_types');
+      const finalGrantTypes = grantTypes.length > 0 ? grantTypes : ["authorization_code", "refresh_token"];
+      const finalResponseTypes = responseTypes.length > 0 ? responseTypes : ["code"];
+
+      await pool.query(
+        `INSERT INTO oauth_clients
+          (client_id, client_secret, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method)
+         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)`,
+        [
+          clientId,
+          clientSecret,
+          clientName,
+          JSON.stringify(redirectUris),
+          JSON.stringify(finalGrantTypes),
+          JSON.stringify(finalResponseTypes),
+          tokenEndpointAuthMethod
+        ]
+      );
+
+      writeJson(response, 201, {
+        client_id: clientId,
+        client_secret: clientSecret,
+        client_id_issued_at: Math.floor(Date.now() / 1000),
+        client_secret_expires_at: 0,
+        redirect_uris: redirectUris,
+        grant_types: finalGrantTypes,
+        response_types: finalResponseTypes,
+        token_endpoint_auth_method: tokenEndpointAuthMethod,
+        client_name: clientName
+      });
+      return;
+    }
 
     if (url.pathname === "/mcp") {
       await handleMcpRequest(request, response);
@@ -951,7 +1045,8 @@ const startHttpServer = async () => {
       privacyPath: "/privacy", 
       authPath: "/auth",
       oauthAuthorizePath: "/oauth/authorize",
-      oauthTokenPath: "/oauth/token"
+      oauthTokenPath: "/oauth/token",
+      oauthRegisterPath: "/register"
     });
   }).listen(port, "0.0.0.0", () => {
     console.log(`[${new Date().toISOString()}] Property Records MCP HTTP server listening on port ${port}; endpoint: /mcp`);
