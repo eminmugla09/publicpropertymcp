@@ -16,6 +16,41 @@ CREATE TABLE users (
     is_active BOOLEAN DEFAULT TRUE
 );
 
+-- OAuth tables (matching FPL structure)
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    code TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    code_challenge TEXT,
+    code_challenge_method TEXT,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    refresh_token TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    revoked BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id TEXT PRIMARY KEY,
+    client_secret TEXT,
+    client_name TEXT,
+    redirect_uris JSONB NOT NULL,
+    grant_types JSONB NOT NULL,
+    response_types JSONB NOT NULL,
+    token_endpoint_auth_method TEXT NOT NULL DEFAULT 'none',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Property Records table
 CREATE TABLE property_records (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -55,3 +90,9 @@ CREATE INDEX idx_property_records_email ON property_records(email);
 CREATE INDEX idx_property_records_address ON property_records(address);
 CREATE INDEX idx_property_records_recording_date ON property_records(recording_date);
 CREATE INDEX idx_property_records_parcel_id ON property_records(parcel_id);
+CREATE INDEX idx_oauth_codes_code ON oauth_codes(code);
+CREATE INDEX idx_oauth_codes_client_id ON oauth_codes(client_id);
+CREATE INDEX idx_oauth_codes_user_id ON oauth_codes(user_id);
+CREATE INDEX idx_oauth_refresh_tokens_refresh_token ON oauth_refresh_tokens(refresh_token);
+CREATE INDEX idx_oauth_refresh_tokens_client_id ON oauth_refresh_tokens(client_id);
+CREATE INDEX idx_oauth_refresh_tokens_user_id ON oauth_refresh_tokens(user_id);

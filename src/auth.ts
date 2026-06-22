@@ -10,10 +10,6 @@ const SALT_ROUNDS = 10;
 const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID || 'demo-client';
 const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET || 'demo-secret';
 
-// OAuth 2.0 storage (in production, use Redis or database)
-const authCodes = new Map<string, { userId: string; expiresAt: number }>();
-const accessTokens = new Map<string, { userId: string; expiresAt: number }>();
-
 const getDatabaseUrl = () => {
   const rawUrl = process.env.DATABASE_URL ?? '';
   if (!rawUrl) {
@@ -42,6 +38,57 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   max: 20
 });
+
+// OAuth 2.0 database storage
+const getRegisteredOauthClient = async (clientId: string) => {
+  try {
+    const result = await pool.query(
+      'SELECT client_id, client_secret, redirect_uris, grant_types, response_types, token_endpoint_auth_method FROM oauth_clients WHERE client_id = $1',
+      [clientId]
+    );
+    if (result.rows.length === 0) {
+      return null;
+    }
+    return {
+      client_id: result.rows[0].client_id,
+      client_secret: result.rows[0].client_secret,
+      redirect_uris: result.rows[0].redirect_uris,
+      grant_types: result.rows[0].grant_types,
+      response_types: result.rows[0].response_types,
+      token_endpoint_auth_method: result.rows[0].token_endpoint_auth_method
+    };
+  } catch (error) {
+    console.error('Error getting OAuth client:', error);
+    return null;
+  }
+};
+
+export const ensureOAuthClient = async () => {
+  try {
+    const result = await pool.query(
+      'SELECT client_id FROM oauth_clients WHERE client_id = $1',
+      [OAUTH_CLIENT_ID]
+    );
+    
+    if (result.rows.length === 0) {
+      await pool.query(
+        `INSERT INTO oauth_clients (client_id, client_secret, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          OAUTH_CLIENT_ID,
+          OAUTH_CLIENT_SECRET || null,
+          'Property Records MCP',
+          JSON.stringify(['http://localhost:3000/callback', 'https://publicproperty.up.railway.app/callback']),
+          JSON.stringify(['authorization_code']),
+          JSON.stringify(['code']),
+          OAUTH_CLIENT_SECRET ? 'client_secret_post' : 'none'
+        ]
+      );
+    }
+  } catch (error) {
+    console.error('Error ensuring OAuth client:', error);
+  }
+};
 
 export interface User {
   id: string;
@@ -229,64 +276,31 @@ export interface OAuthTokenResponse {
   scope?: string;
 }
 
-// Generate authorization code
-export function generateAuthCode(userId: string): string {
-  const code = crypto.randomBytes(32).toString('hex');
-  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
-  authCodes.set(code, { userId, expiresAt });
-  return code;
-}
-
-// Validate authorization code
-export function validateAuthCode(code: string): { valid: boolean; userId?: string } {
-  const authData = authCodes.get(code);
-  if (!authData) {
-    return { valid: false };
-  }
-  
-  if (Date.now() > authData.expiresAt) {
-    authCodes.delete(code);
-    return { valid: false };
-  }
-  
-  authCodes.delete(code); // One-time use
-  return { valid: true, userId: authData.userId };
-}
-
-// Generate OAuth access token
-export function generateOAuthAccessToken(userId: string): string {
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
-  accessTokens.set(token, { userId, expiresAt });
-  return token;
-}
-
-// Validate OAuth access token
-export function validateOAuthAccessToken(token: string): { valid: boolean; userId?: string } {
-  const tokenData = accessTokens.get(token);
-  if (!tokenData) {
-    return { valid: false };
-  }
-  
-  if (Date.now() > tokenData.expiresAt) {
-    accessTokens.delete(token);
-    return { valid: false };
-  }
-  
-  return { valid: true, userId: tokenData.userId };
-}
-
 // Handle OAuth authorization request
 export async function handleOAuthAuthorization(
   request: OAuthAuthorizationRequest,
-  userId: string
+  userId: string,
+  userEmail: string
 ): Promise<{ code: string; state?: string }> {
-  // Validate client_id
-  if (request.client_id !== OAUTH_CLIENT_ID) {
-    throw new Error('Invalid client_id');
+  const oauthClient = request.client_id ? await getRegisteredOauthClient(request.client_id) : null;
+  
+  if (!oauthClient || request.response_type !== 'code') {
+    throw new Error('Invalid client or response_type');
   }
   
-  const code = generateAuthCode(userId);
+  if (oauthClient.redirect_uris && !oauthClient.redirect_uris.includes(request.redirect_uri)) {
+    throw new Error('Invalid redirect_uri');
+  }
+  
+  const code = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+  
+  await pool.query(
+    `INSERT INTO oauth_codes (code, client_id, user_id, email, redirect_uri, code_challenge, code_challenge_method, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [code, oauthClient.client_id, userId, userEmail, request.redirect_uri, null, null, expiresAt]
+  );
+  
   return { code, state: request.state };
 }
 
@@ -296,21 +310,53 @@ export async function handleOAuthToken(
 ): Promise<OAuthTokenResponse> {
   const { code, client_id, client_secret } = request;
   
-  // Validate client credentials
-  if (client_id !== OAUTH_CLIENT_ID) {
+  const oauthClient = client_id ? await getRegisteredOauthClient(client_id) : null;
+  
+  if (!oauthClient) {
     throw new Error('Invalid client_id');
   }
   
-  if (client_secret !== OAUTH_CLIENT_SECRET) {
-    throw new Error('Invalid client_secret');
+  if (oauthClient.token_endpoint_auth_method === 'client_secret_post' || oauthClient.token_endpoint_auth_method === 'client_secret_basic') {
+    if (!oauthClient.client_secret || client_secret !== oauthClient.client_secret) {
+      throw new Error('Invalid client_secret');
+    }
   }
   
-  const validation = validateAuthCode(code);
-  if (!validation.valid || !validation.userId) {
-    throw new Error('Invalid or expired authorization code');
+  const result = await pool.query(
+    'SELECT * FROM oauth_codes WHERE code = $1',
+    [code]
+  );
+  
+  if (result.rows.length === 0) {
+    throw new Error('Invalid authorization code');
   }
   
-  const access_token = generateOAuthAccessToken(validation.userId);
+  const row = result.rows[0];
+  
+  if (row.used) {
+    throw new Error('Authorization code already used');
+  }
+  
+  if (new Date() > new Date(row.expires_at)) {
+    throw new Error('Authorization code expired');
+  }
+  
+  if (row.client_id !== oauthClient.client_id) {
+    throw new Error('Authorization code client mismatch');
+  }
+  
+  await pool.query('UPDATE oauth_codes SET used = TRUE WHERE code = $1', [code]);
+  
+  const access_token = crypto.randomBytes(32).toString('hex');
+  const refresh_token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+  const refreshExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+  
+  await pool.query(
+    `INSERT INTO oauth_refresh_tokens (refresh_token, client_id, user_id, email, expires_at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [refresh_token, oauthClient.client_id, row.user_id, row.email, refreshExpiresAt]
+  );
   
   return {
     access_token,

@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { Pool } from 'pg';
-import { register, login, verifyToken, handleOAuthAuthorization, handleOAuthToken, validateOAuthAccessToken } from './auth.js';
+import { register, login, verifyToken, handleOAuthAuthorization, handleOAuthToken, ensureOAuthClient } from './auth.js';
 import express from 'express';
 import cors from 'cors';
 
@@ -325,16 +325,10 @@ const requireAuth = async (request: IncomingMessage, response: ServerResponse): 
 
   const token = authHeader.substring(7);
   
-  // Try JWT token first
+  // Try JWT token
   const jwtVerification = verifyToken(token);
   if (jwtVerification.valid) {
     return { authorized: true, userId: jwtVerification.userId };
-  }
-  
-  // Try OAuth token
-  const oauthVerification = validateOAuthAccessToken(token);
-  if (oauthVerification.valid) {
-    return { authorized: true, userId: oauthVerification.userId };
   }
 
   writeJson(response, 401, { error: "Unauthorized", message: "Invalid or expired token" });
@@ -669,8 +663,11 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
   }
 };
 
-const startHttpServer = () => {
+const startHttpServer = async () => {
   const port = Number(process.env.PORT ?? 3000);
+
+  // Ensure OAuth client exists in database
+  await ensureOAuthClient();
 
   createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -734,10 +731,12 @@ const startHttpServer = () => {
       // For demo purposes, we'll use the first user in the database
       // In production, this would come from a login session
       let userId = "demo-user-id";
+      let userEmail = "demo@example.com";
       try {
-        const userResult = await pool.query('SELECT id FROM users LIMIT 1');
+        const userResult = await pool.query('SELECT id, email FROM users LIMIT 1');
         if (userResult.rows.length > 0) {
           userId = userResult.rows[0].id;
+          userEmail = userResult.rows[0].email;
         }
       } catch (error) {
         console.error('Error fetching user for OAuth:', error);
@@ -750,7 +749,7 @@ const startHttpServer = () => {
           redirect_uri: redirect_uri || 'http://localhost:3000/callback',
           scope: scope || 'read',
           state: state || undefined
-        }, userId);
+        }, userId, userEmail);
         
         // Redirect with authorization code
         const redirectUrl = new URL(redirect_uri || 'http://localhost:3000/callback');
@@ -794,6 +793,21 @@ const startHttpServer = () => {
         writeJson(response, 400, { error: "Token request failed", message: error.message });
         return;
       }
+    }
+
+    // OAuth 2.0 Metadata Endpoint (for ChatGPT discovery)
+    if (url.pathname === "/.well-known/oauth-authorization-server") {
+      const baseUrl = process.env.BASE_URL || `http://${request.headers.host}`;
+      writeJson(response, 200, {
+        issuer: baseUrl,
+        authorization_endpoint: `${baseUrl}/oauth/authorize`,
+        token_endpoint: `${baseUrl}/oauth/token`,
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code"],
+        token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+        code_challenge_methods_supported: ["S256", "plain"]
+      });
+      return;
     }
 
     if (url.pathname === "/mcp") {
