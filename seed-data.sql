@@ -127,7 +127,7 @@ BEGIN
     'LOT 8, BLOCK 15, NORTH PALM BEACH ESTATES, ACCORDING TO PLAT...',
     'recent purchase',
     '2026-06-10 00:00:00+00',
-    '2026-06-25 00:00:00+00',
+    '2026-06-20 00:00:00+00',
     '2026R000321',
     '8901-234',
     485000.00,
