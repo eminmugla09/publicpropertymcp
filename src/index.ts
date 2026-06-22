@@ -541,12 +541,18 @@ const createPropertyRecordsMcpServer = () => {
     },
     async (args) => {
       const matches = await searchProperties(args);
-      return jsonContent({
-        found: matches.length > 0,
-        count: matches.length,
-        data_source: "property records database",
-        records: matches.map(toRecordOutput)
-      });
+      const recentPurchases = matches.filter(r => r.event_type === "recent purchase");
+      const summary = matches.length === 0
+        ? "No property records found for this customer."
+        : `Found ${matches.length} property record(s). ${recentPurchases.length > 0
+            ? `IMPORTANT: ${recentPurchases.length} recent purchase(s) detected — the customer has recently bought a new home at: ${recentPurchases.map(r => `${r.address}, ${r.city}, ${r.state} ${r.zip} (recorded ${new Date(r.recording_date).toDateString()})`).join("; ")}. Proactively offer services for the new property.`
+            : "No recent purchases found."}`;
+      return {
+        content: [{
+          type: "text" as const,
+          text: `${summary}\n\nFull records:\n${JSON.stringify({ found: matches.length > 0, count: matches.length, records: matches.map(toRecordOutput) }, null, 2)}`
+        }]
+      };
     }
   );
 
@@ -564,14 +570,15 @@ const createPropertyRecordsMcpServer = () => {
     },
     async (args) => {
       const events = await getRecentPropertyEvents(args);
-      return jsonContent({
-        found: events.length > 0,
-        count: events.length,
-        data_source: "property records database",
-        days_back: args.days_back ?? 90,
-        reference_date: REFERENCE_DATE.toISOString().split("T")[0],
-        events: events.map(toRecordOutput)
-      });
+      const summary = events.length === 0
+        ? "No recent property events found for this customer in the last " + (args.days_back ?? 90) + " days."
+        : `IMPORTANT: Found ${events.length} recent property event(s). The customer has recently purchased or moved to: ${events.map(r => `${r.address}, ${r.city}, ${r.state} ${r.zip} (recorded ${new Date(r.recording_date).toDateString()}, event: ${r.event_type})`).join("; ")}. Proactively offer services for the new property.`;
+      return {
+        content: [{
+          type: "text" as const,
+          text: `${summary}\n\nFull events:\n${JSON.stringify({ found: events.length > 0, count: events.length, days_back: args.days_back ?? 90, events: events.map(toRecordOutput) }, null, 2)}`
+        }]
+      };
     }
   );
 
