@@ -4,7 +4,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import {
-  getCustomerProfile,
+  CustomerProfile,
+  getCustomerProfiles,
   getMockPropertyRecords,
   PropertyRecord
 } from "./data/mockPropertyRecords.js";
@@ -51,6 +52,17 @@ const matchesAddress = (record: PropertyRecord, address?: string) => {
     `${record.address}, ${record.city}, ${record.state} ${record.zip}`,
     `${record.address}, ${record.city}`,
     `${record.city}, ${record.state}`
+  ].map(normalizeAddress);
+  return haystack.some((h) => h.includes(needle) || needle.includes(h));
+};
+
+const matchesKnownAddress = (record: PropertyRecord, address?: string) => {
+  if (!address) return false;
+  const needle = normalizeAddress(address);
+  const haystack = [
+    record.address,
+    `${record.address}, ${record.city}, ${record.state} ${record.zip}`,
+    `${record.address}, ${record.city}`
   ].map(normalizeAddress);
   return haystack.some((h) => h.includes(needle) || needle.includes(h));
 };
@@ -103,18 +115,59 @@ const getRecentPropertyEvents = (filters: {
     .sort((a, b) => new Date(b.recording_date).getTime() - new Date(a.recording_date).getTime());
 };
 
+const findCustomerProfile = (input: {
+  customer_name?: string;
+  email?: string;
+  phone?: string;
+  known_addresses?: string[];
+}) => {
+  const customers = getCustomerProfiles();
+  const records = getMockPropertyRecords();
+  const { customer_name, email, phone, known_addresses = [] } = input;
+
+  return customers.find((customer) => {
+    const nameMatch = customer_name ? nameMatches(customer.full_name, customer.alternate_names, customer_name) : false;
+    const emailMatch = email ? emailMatches(customer.email, email) : false;
+    const phoneMatch = phone ? phoneMatches(customer.phone, phone) : false;
+    const addressMatch = known_addresses.some((address) =>
+      records.some(
+        (record) =>
+          record.owner_name === customer.full_name &&
+          record.known_fpl_property &&
+          matchesKnownAddress(record, address)
+      )
+    );
+
+    return nameMatch || emailMatch || phoneMatch || addressMatch;
+  });
+};
+
 const matchPropertyToCustomer = (input: {
   customer_name: string;
   email?: string;
   phone?: string;
   known_addresses?: string[];
 }) => {
-  const customer = getCustomerProfile();
   const records = getMockPropertyRecords();
   const { customer_name, email, phone, known_addresses = [] } = input;
 
+  const customer = findCustomerProfile(input);
+
+  if (!customer) {
+    return {
+      matched: false,
+      match_confidence: "low" as const,
+      reason: "No matching customer profile found in mock public property records.",
+      matched_property: null,
+      recommended_next_action: "Ask the customer for their email, phone, or a known address to anchor the match."
+    };
+  }
+
   const knownAddressMatch = known_addresses.some((address) =>
-    records.some((record) => record.known_fpl_property && matchesAddress(record, address))
+    records.some(
+      (record) =>
+        record.owner_name === customer.full_name && record.known_fpl_property && matchesKnownAddress(record, address)
+    )
   );
 
   const identitySignals = [
@@ -135,9 +188,9 @@ const matchPropertyToCustomer = (input: {
     return {
       matched: false,
       match_confidence: "low" as const,
-      reason: "No recent mock public property record matches the provided customer information.",
+      reason: `Customer ${customer.full_name} was found, but no recent mock public property record matches a new property purchase.`,
       matched_property: null,
-      recommended_next_action: "Ask the customer for additional identifying information such as email, phone, or a known address."
+      recommended_next_action: "Ask the customer for the address of the new property they want EV services for."
     };
   }
 
@@ -147,7 +200,7 @@ const matchPropertyToCustomer = (input: {
 
   if (identitySignals >= 2 && knownAddressMatch) {
     confidence = "high";
-    reason = `Owner name ${customer.full_name} matches customer profile, the email/phone matches, and the known FPL address in Miami anchors the customer. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
+    reason = `Owner name ${customer.full_name} matches customer profile, the email/phone matches, and the known FPL address anchors the customer. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
     action = `Ask the customer whether they want to start FPL service at ${matchedRecord.address} in ${matchedRecord.city} on the closing date (${matchedRecord.closing_date}).`;
   } else if (identitySignals >= 2) {
     confidence = "high";
@@ -155,7 +208,7 @@ const matchPropertyToCustomer = (input: {
     action = `Confirm the new ${matchedRecord.city} property and ask whether the customer wants FPL service started there on ${matchedRecord.closing_date}.`;
   } else if (knownAddressMatch) {
     confidence = "high";
-    reason = `The known FPL address in Miami anchors the customer to the profile, and a recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
+    reason = `The known FPL address anchors the customer to the profile, and a recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
     action = `Ask the customer whether ${matchedRecord.address} is their new property and whether to start FPL service there on ${matchedRecord.closing_date}.`;
   } else if (identitySignals === 1) {
     confidence = "medium";

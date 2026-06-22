@@ -49,6 +49,14 @@ export const CUSTOMER_RAFAEL_VARGAS: CustomerProfile = {
   known_fpl_address: "888 Brickell Ave Apt 2104, Miami, FL 33131"
 };
 
+export const CUSTOMER_EMIN_MUGLA: CustomerProfile = {
+  full_name: "Emin Mugla",
+  alternate_names: [],
+  email: "woarzus@gmail.com",
+  phone: "954-666-2333",
+  known_fpl_address: "1450 Brickell Bay Dr, Apt 1402, Miami, FL 33131"
+};
+
 export const MOCK_PROPERTY_RECORDS: PropertyRecord[] = [
   {
     id: "pbc-2026-124-anchorage",
@@ -86,6 +94,51 @@ export const MOCK_PROPERTY_RECORDS: PropertyRecord[] = [
     event_type: "ownership registration",
     recording_date: "2022-03-10",
     closing_date: "2022-03-24",
+    confidence: "high",
+    source: "mock public property record",
+    service_territory: "FPL",
+    property_type: "condominium",
+    has_garage: false,
+    ev_suitability_hint: "building EV charging may depend on condo association approval",
+    notes: "Known existing FPL utility service address. Used as a customer anchor.",
+    known_fpl_property: true
+  },
+  {
+    id: "pbc-2026-320-anchorage",
+    owner_name: "Emin Mugla",
+    alternate_names: [],
+    email: "woarzus@gmail.com",
+    phone: "954-666-2333",
+    address: "320 Anchorage Dr",
+    city: "North Palm Beach",
+    state: "FL",
+    zip: "33408",
+    county: "Palm Beach County",
+    event_type: "recent purchase",
+    recording_date: "2026-06-15",
+    closing_date: "2026-06-29",
+    confidence: "high",
+    source: "mock public property record",
+    service_territory: "FPL",
+    property_type: "single family home",
+    has_garage: true,
+    ev_suitability_hint: "likely suitable for home EV charging",
+    notes: "Newly registered property that may need FPL move-in service."
+  },
+  {
+    id: "mdc-2026-1450-brickell-bay",
+    owner_name: "Emin Mugla",
+    alternate_names: [],
+    email: "woarzus@gmail.com",
+    phone: "954-666-2333",
+    address: "1450 Brickell Bay Dr, Apt 1402",
+    city: "Miami",
+    state: "FL",
+    zip: "33131",
+    county: "Miami-Dade County",
+    event_type: "ownership registration",
+    recording_date: "2018-03-09",
+    closing_date: "2018-03-23",
     confidence: "high",
     source: "mock public property record",
     service_territory: "FPL",
@@ -187,4 +240,10 @@ export const MOCK_PROPERTY_RECORDS: PropertyRecord[] = [
 
 export const getMockPropertyRecords = (): PropertyRecord[] => MOCK_PROPERTY_RECORDS;
 
+export const getCustomerProfiles = (): CustomerProfile[] => [
+  CUSTOMER_RAFAEL_VARGAS,
+  CUSTOMER_EMIN_MUGLA
+];
+
+/** @deprecated Use getCustomerProfiles() for multi-customer lookups. */
 export const getCustomerProfile = (): CustomerProfile => CUSTOMER_RAFAEL_VARGAS;
