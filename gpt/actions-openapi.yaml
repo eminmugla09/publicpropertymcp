@@ -22,7 +22,7 @@ paths:
     post:
       operationId: search_properties_by_owner
       summary: Search properties by owner
-      description: CRITICAL for FPL/EV service conversations. Search public property records by owner name, email, or phone. Returns ALL properties a customer owns across all addresses. When a customer asks about EV services, solar, move-in, or any utility service at a new location, call this FIRST with the customer's name to discover properties they may have recently bought. This prevents asking the customer for an address you should already know.
+      description: CRITICAL for FPL/EV service conversations. Search public property records by owner name, alternate name, email, or phone. Returns ALL properties a customer owns across all addresses. When a customer asks about EV services, solar, move-in, a new city such as North Palm Beach, or any utility service at a new location, call this FIRST with the customer's name before asking for a street address. Use any recent purchase/new-home record returned here as the candidate service address.
       requestBody:
         required: true
         content:
@@ -31,6 +31,8 @@ paths:
               type: object
               properties:
                 owner_name:
+                  type: string
+                alternate_name:
                   type: string
                 email:
                   type: string
@@ -61,6 +63,10 @@ paths:
                       properties:
                         owner_name:
                           type: string
+                        alternate_names:
+                          type: array
+                          items:
+                            type: string
                         address:
                           type: string
                         city:
@@ -103,7 +109,7 @@ paths:
     post:
       operationId: get_recent_property_events
       summary: Get recent property events
-      description: CRITICAL for FPL/EV service conversations. Check if the customer has recently purchased or moved to a new home (within the last 90 days by default). When the customer asks about EV services, solar, start service, move-in, or mentions a new city or address, you MUST call this FIRST with the customer's name. This reveals recent home purchases that the FPL system may not yet know about. The result includes the new property address and closing date, which you should use to proactively offer move-in and EV services.
+      description: CRITICAL for FPL/EV service conversations. Check if the customer has recently purchased or moved to a new home (within the last 90 days by default). When the customer asks about EV services, solar, start service, move-in, or mentions only a new city/area such as North Palm Beach, call this before asking for a street address. This reveals recent home purchases that the FPL system may not yet know about. The result includes the new property address and closing date, which you should use to proactively offer move-in and EV services.
       requestBody:
         required: true
         content:
@@ -112,6 +118,8 @@ paths:
               type: object
               properties:
                 owner_name:
+                  type: string
+                alternate_name:
                   type: string
                 email:
                   type: string
@@ -187,7 +195,7 @@ paths:
     post:
       operationId: match_property_to_customer
       summary: Match property to customer
-      description: Confirm whether a specific property belongs to a customer by matching on name, email, phone, or known addresses. Use this AFTER get_recent_property_events reveals a new purchase — pass only the customer name (do NOT pass old/known addresses as hints, only pass addresses you are trying to confirm). Returns matched_property with full details if found.
+      description: Confirm whether a specific property belongs to a customer by matching on name, alternate name, email, phone, or known addresses. Use this AFTER get_recent_property_events reveals a new purchase. Do not use this as the first step for city-only EV requests; search/get recent property events first. Returns matched_property with full details if found.
       requestBody:
         required: true
         content:
@@ -198,6 +206,8 @@ paths:
                 - customer_name
               properties:
                 customer_name:
+                  type: string
+                alternate_name:
                   type: string
                 email:
                   type: string

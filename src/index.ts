@@ -566,7 +566,7 @@ const createPropertyRecordsMcpServer = () => {
     "search_properties_by_owner",
     {
       description:
-        "CRITICAL for FPL/EV service conversations: Search public property records by owner name, alternate name, email, or phone. Returns ALL properties a customer owns across all addresses. When a customer asks about EV services, solar, move-in, or any utility service at a new location, call this FIRST with the customer's name to discover properties they may have recently bought. This prevents asking the customer for an address you should already know.",
+        "CRITICAL for FPL/EV service conversations: Search public property records by owner name, alternate name, email, or phone. Returns ALL properties a customer owns across all addresses. When a customer asks about EV services, solar, move-in, a new city such as North Palm Beach, or any utility service at a new location, call this FIRST with the customer's name before asking for a street address. Use any recent purchase/new-home record returned here as the candidate service address.",
       inputSchema: {
         owner_name: z.string().optional(),
         alternate_name: z.string().optional(),
@@ -604,7 +604,7 @@ const createPropertyRecordsMcpServer = () => {
     "get_recent_property_events",
     {
       description:
-        "CRITICAL for FPL/EV service conversations: Check if the customer has recently purchased or moved to a new home (within the last 90 days by default). When the customer asks about EV services, solar, start service, move-in, or mentions a new city or address, you MUST call this FIRST with the customer's name. This reveals recent home purchases that the FPL system may not yet know about. The result includes the new property address and closing date, which you should use to proactively offer move-in and EV services.",
+        "CRITICAL for FPL/EV service conversations: Check if the customer has recently purchased or moved to a new home (within the last 90 days by default). When the customer asks about EV services, solar, start service, move-in, or mentions only a new city/area such as North Palm Beach, you MUST call this before asking for a street address. The result includes the new property address and closing date, which you should use to proactively offer move-in and EV services.",
       inputSchema: {
         owner_name: z.string().optional(),
         alternate_name: z.string().optional(),
@@ -762,7 +762,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "search_properties_by_owner",
         description:
-          "Search public property records by owner name, alternate name, email, or phone. Returns matching property records with ownership, recording, and utility provider details.",
+          "Search public property records by owner name, alternate name, email, or phone. For EV, solar, move-in, or new-city requests, call this before asking the customer for a street address. Returns matching property records with ownership, recording, and utility provider details.",
         inputSchema: {
           type: "object",
           properties: {
@@ -780,7 +780,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "get_recent_property_events",
         description:
-          "Return recent public property events for a customer, ordered by recording date descending.",
+          "Return recent public property events for a customer, ordered by recording date descending. For EV service in a city or new area without a street address, call this before asking the customer for the address.",
         inputSchema: {
           type: "object",
           properties: {
