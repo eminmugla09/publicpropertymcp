@@ -10,6 +10,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
+import { runMigration } from '../migrate-db.js';
 
 const getDatabaseUrl = () => {
   const rawUrl = process.env.DATABASE_URL ?? '';
@@ -60,6 +61,11 @@ const searchProperties = async (filters: {
   state?: string;
   userId?: string;
 }) => {
+  // Handle null or undefined filters
+  if (!filters) {
+    filters = {};
+  }
+
   const conditions = [];
   const params = [];
   let paramIndex = 1;
@@ -279,6 +285,11 @@ const matchPropertyToCustomer = async (input: {
 };
 
 const getPropertyRecordByAddress = async (address: string) => {
+  // Handle null or undefined input
+  if (!address) {
+    return null;
+  }
+
   // Split before normalization so commas are preserved
   const streetPartRaw = address.split(',')[0].trim();
   const normalized = normalizeAddress(address);
@@ -1185,8 +1196,33 @@ const startStdioServer = async () => {
   await mcpServer.connect(transport);
 };
 
-if (process.env.MCP_TRANSPORT === "http" || process.env.PORT) {
-  startHttpServer();
-} else {
-  await startStdioServer();
+// Run database migration on startup, but skip if running in test mode
+// Tests will handle migration separately
+if (!process.env.DATABASE_URL?.includes('_test_')) {
+  await runMigration();
 }
+
+// Only start the server when this file is the runtime entrypoint.
+// Tests set START_SERVER=false to import the module without blocking on stdio.
+if (process.env.START_SERVER !== "false") {
+  if (process.env.MCP_TRANSPORT === "http" || process.env.PORT) {
+    startHttpServer();
+  } else {
+    await startStdioServer();
+  }
+}
+
+export {
+  pool,
+  createPropertyRecordsMcpServer,
+  mcpServer,
+  searchProperties,
+  getRecentPropertyEvents,
+  matchPropertyToCustomer,
+  getPropertyRecordByAddress,
+  normalizeString,
+  normalizeAddress,
+  jsonContent,
+  toRecordOutput,
+  REFERENCE_DATE
+};

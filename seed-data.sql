@@ -4,7 +4,8 @@
 -- Insert sample users
 INSERT INTO users (email, password_hash, full_name) VALUES
   ('rjvargas87@gmail.com', '$2b$10$QGJwQAV6gsxC07uvxykOJOAo50PnPaE9VUUPtcf50cr5Z9L2x9Eb6', 'Rafael Vargas'),
-  ('woarzus@gmail.com', '$2b$10$QGJwQAV6gsxC07uvxykOJOAo50PnPaE9VUUPtcf50cr5Z9L2x9Eb6', 'Emin Mugla')
+  ('woarzus@gmail.com', '$2b$10$QGJwQAV6gsxC07uvxykOJOAo50PnPaE9VUUPtcf50cr5Z9L2x9Eb6', 'Emin Mugla'),
+  ('shankaresengupta@gmail.com', '$2b$10$QGJwQAV6gsxC07uvxykOJOAo50PnPaE9VUUPtcf50cr5Z9L2x9Eb6', 'Shankar Sengupta')
 ON CONFLICT (email) DO NOTHING;
 
 -- Get user IDs for property records
@@ -12,9 +13,11 @@ DO $$
 DECLARE
   rafael_id UUID;
   emin_id UUID;
+  shankar_id UUID;
 BEGIN
   SELECT id INTO rafael_id FROM users WHERE email = 'rjvargas87@gmail.com';
   SELECT id INTO emin_id FROM users WHERE email = 'woarzus@gmail.com';
+  SELECT id INTO shankar_id FROM users WHERE email = 'shankaresengupta@gmail.com';
 
   -- Insert Rafael Vargas property records (Miami-Dade County format)
   INSERT INTO property_records (
@@ -272,6 +275,68 @@ BEGIN
     '7890-345',
     395000.00,
     405000.00,
+    'high',
+    'Miami-Dade County Recorder',
+    'FPL',
+    'condo',
+    false,
+    false
+  );
+
+  -- Insert Shankar Sengupta property records (Miami-Dade County format)
+  INSERT INTO property_records (
+    user_id, owner_name, alternate_names, email, phone, address, city, state, zip, county,
+    parcel_id, legal_description, event_type, recording_date, closing_date, document_number,
+    book_page, sale_price, assessed_value, confidence, source, utility_provider,
+    property_type, has_garage, known_property
+  ) VALUES
+  (
+    shankar_id,
+    'Shankar Sengupta',
+    ARRAY['S. Sengupta', 'Shankar S.', 'Sengupta'],
+    'shankaresengupta@gmail.com',
+    '561-555-0145',
+    '1234 Sunset Blvd',
+    'Miami',
+    'FL',
+    '33125',
+    'Miami-Dade',
+    '30-22-12-012-1234',
+    'SINGLE FAMILY HOME, SUNSET BOULEVARD, ACCORDING TO PLAT...',
+    'known service address',
+    '2025-01-15 00:00:00+00',
+    NULL,
+    '2025R000888',
+    '3456-789',
+    NULL,
+    425000.00,
+    'high',
+    'Utility customer database',
+    'FPL',
+    'single-family home',
+    true,
+    true
+  ),
+  (
+    shankar_id,
+    'Shankar Sengupta',
+    ARRAY['S. Sengupta', 'Shankar S.', 'Sengupta'],
+    'shankaresengupta@gmail.com',
+    '561-555-0145',
+    '2345 Ocean Drive',
+    'Miami Beach',
+    'FL',
+    '33139',
+    'Miami-Dade',
+    '30-21-11-005-2345',
+    'CONDO UNIT 5A, OCEAN DRIVE CONDOMINIUM, ACCORDING TO DECLARATION...',
+    'recent purchase',
+    '2026-06-22 00:00:00+00',
+    '2026-07-06 00:00:00+00',
+    '2026R000999',
+    '4567-890',
+    485000.00,
+    500000.00,
     'high',
     'Miami-Dade County Recorder',
     'FPL',
