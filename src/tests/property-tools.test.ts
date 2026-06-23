@@ -28,6 +28,17 @@ describe('Property Records Tools', () => {
     expect(result[0].owner_name).toContain('Rafael');
   });
 
+  it('should search properties by alternate owner name', async () => {
+    const result = await handlers.searchProperties({
+      alternate_name: 'E. Mugla'
+    });
+
+    expect(result).toBeDefined();
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some((record: any) => record.owner_name === 'Emin Mugla')).toBe(true);
+  });
+
   it('should search properties by email', async () => {
     const result = await handlers.searchProperties({
       email: 'rjvargas87@gmail.com'
@@ -108,6 +119,18 @@ describe('Property Records Tools', () => {
     expect(Array.isArray(result)).toBe(true);
   });
 
+  it('should get recent property events by alternate owner name', async () => {
+    const result = await handlers.getRecentPropertyEvents({
+      alternate_name: 'S. Sengupta',
+      days_back: 120
+    });
+
+    expect(result).toBeDefined();
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some((record: any) => record.owner_name === 'Shankar Sengupta')).toBe(true);
+  });
+
   it('should filter recent events by event type', async () => {
     const result = await handlers.getRecentPropertyEvents({
       owner_name: 'Rafael Vargas'
@@ -136,6 +159,17 @@ describe('Property Records Tools', () => {
     const result = await handlers.matchPropertyToCustomer({
       customer_name: 'Rafael Vargas',
       email: 'rjvargas87@gmail.com'
+    });
+
+    expect(result).toBeDefined();
+    expect(result.matched).toBe(true);
+    expect(result.match_confidence).toBeDefined();
+  });
+
+  it('should match property to customer by alternate name', async () => {
+    const result = await handlers.matchPropertyToCustomer({
+      customer_name: 'Unlisted Name',
+      alternate_name: 'R. Vargas'
     });
 
     expect(result).toBeDefined();
@@ -206,6 +240,7 @@ describe('Property Records Tools', () => {
   it('should format record output correctly', async () => {
     const testRecord = {
       owner_name: 'Test Owner',
+      alternate_names: ['T. Owner'],
       address: '123 Test St',
       city: 'Miami',
       state: 'FL',
@@ -230,6 +265,7 @@ describe('Property Records Tools', () => {
     const output = handlers.toRecordOutput(testRecord);
 
     expect(output.owner_name).toBe('Test Owner');
+  expect(output.alternate_names).toEqual(['T. Owner']);
     expect(output.address).toBe('123 Test St');
     expect(output.city).toBe('Miami');
     expect(output.state).toBe('FL');

@@ -53,8 +53,39 @@ const normalizeAddress = (address: string) =>
     .replace(/,/g, "")
     .trim();
 
+type QueryParam = string | Date;
+
+const addOwnerNameCondition = (
+  conditions: string[],
+  params: QueryParam[],
+  paramIndex: number,
+  ownerName?: string,
+  alternateName?: string
+) => {
+  const nameFilters = [ownerName, alternateName]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => `%${value.trim()}%`);
+
+  if (nameFilters.length === 0) {
+    return paramIndex;
+  }
+
+  const nameConditions = nameFilters.map(() => `(
+    lower(owner_name) LIKE lower($${paramIndex++}) OR
+    exists (select 1 from unnest(coalesce(alternate_names, ARRAY[]::text[])) alt where lower(alt) LIKE lower($${paramIndex++}))
+  )`);
+
+  conditions.push(`(${nameConditions.join(" OR ")})`);
+  for (const nameFilter of nameFilters) {
+    params.push(nameFilter, nameFilter);
+  }
+
+  return paramIndex;
+};
+
 const searchProperties = async (filters: {
   owner_name?: string;
+  alternate_name?: string;
   email?: string;
   phone?: string;
   city?: string;
@@ -75,13 +106,7 @@ const searchProperties = async (filters: {
     params.push(filters.userId);
   }
 
-  if (filters.owner_name) {
-    conditions.push(`(
-      lower(owner_name) LIKE lower($${paramIndex++}) OR
-      exists (select 1 from unnest(alternate_names) alt where lower(alt) LIKE lower($${paramIndex++}))
-    )`);
-    params.push(`%${filters.owner_name}%`, `%${filters.owner_name}%`);
-  }
+  paramIndex = addOwnerNameCondition(conditions, params, paramIndex, filters.owner_name, filters.alternate_name);
 
   if (filters.email) {
     conditions.push(`lower(email) = lower($${paramIndex++})`);
@@ -118,6 +143,7 @@ const searchProperties = async (filters: {
 
 const getRecentPropertyEvents = async (filters: {
   owner_name?: string;
+  alternate_name?: string;
   email?: string;
   phone?: string;
   days_back?: number;
@@ -139,13 +165,7 @@ const getRecentPropertyEvents = async (filters: {
   conditions.push(`recording_date >= $${paramIndex++}`);
   params.push(cutoff);
 
-  if (filters.owner_name) {
-    conditions.push(`(
-      lower(owner_name) LIKE lower($${paramIndex++}) OR
-      exists (select 1 from unnest(alternate_names) alt where lower(alt) LIKE lower($${paramIndex++}))
-    )`);
-    params.push(`%${filters.owner_name}%`, `%${filters.owner_name}%`);
-  }
+  paramIndex = addOwnerNameCondition(conditions, params, paramIndex, filters.owner_name, filters.alternate_name);
 
   if (filters.email) {
     conditions.push(`lower(email) = lower($${paramIndex++})`);
@@ -172,12 +192,13 @@ const getRecentPropertyEvents = async (filters: {
 
 const matchPropertyToCustomer = async (input: {
   customer_name: string;
+  alternate_name?: string;
   email?: string;
   phone?: string;
   known_addresses?: string[];
   userId?: string;
 }) => {
-  const { customer_name, email, phone, known_addresses = [], userId } = input;
+  const { customer_name, alternate_name, email, phone, known_addresses = [], userId } = input;
 
   const conditions = [];
   const params = [];
@@ -188,13 +209,7 @@ const matchPropertyToCustomer = async (input: {
     params.push(userId);
   }
 
-  if (customer_name) {
-    conditions.push(`(
-      lower(owner_name) LIKE lower($${paramIndex++}) OR
-      exists (select 1 from unnest(alternate_names) alt where lower(alt) LIKE lower($${paramIndex++}))
-    )`);
-    params.push(`%${customer_name}%`, `%${customer_name}%`);
-  }
+  paramIndex = addOwnerNameCondition(conditions, params, paramIndex, customer_name, alternate_name);
 
   if (email) {
     conditions.push(`lower(email) = lower($${paramIndex++})`);
@@ -322,6 +337,7 @@ const jsonContent = (payload: unknown) => ({
 
 const toRecordOutput = (record: any) => ({
   owner_name: record.owner_name,
+  alternate_names: record.alternate_names,
   address: record.address,
   city: record.city,
   state: record.state,
@@ -550,9 +566,10 @@ const createPropertyRecordsMcpServer = () => {
     "search_properties_by_owner",
     {
       description:
-        "CRITICAL for FPL/EV service conversations: Search public property records by owner name, email, or phone. Returns ALL properties a customer owns across all addresses. When a customer asks about EV services, solar, move-in, or any utility service at a new location, call this FIRST with the customer's name to discover properties they may have recently bought. This prevents asking the customer for an address you should already know.",
+        "CRITICAL for FPL/EV service conversations: Search public property records by owner name, alternate name, email, or phone. Returns ALL properties a customer owns across all addresses. When a customer asks about EV services, solar, move-in, or any utility service at a new location, call this FIRST with the customer's name to discover properties they may have recently bought. This prevents asking the customer for an address you should already know.",
       inputSchema: {
         owner_name: z.string().optional(),
+        alternate_name: z.string().optional(),
         email: z.string().optional(),
         phone: z.string().optional(),
         city: z.string().optional(),
@@ -590,6 +607,7 @@ const createPropertyRecordsMcpServer = () => {
         "CRITICAL for FPL/EV service conversations: Check if the customer has recently purchased or moved to a new home (within the last 90 days by default). When the customer asks about EV services, solar, start service, move-in, or mentions a new city or address, you MUST call this FIRST with the customer's name. This reveals recent home purchases that the FPL system may not yet know about. The result includes the new property address and closing date, which you should use to proactively offer move-in and EV services.",
       inputSchema: {
         owner_name: z.string().optional(),
+        alternate_name: z.string().optional(),
         email: z.string().optional(),
         phone: z.string().optional(),
         days_back: z.number().optional()
@@ -620,9 +638,10 @@ const createPropertyRecordsMcpServer = () => {
     "match_property_to_customer",
     {
       description:
-        "Use this to confirm whether a specific property address belongs to the customer. Call this AFTER get_recent_property_events or search_properties_by_owner reveals a property, when you need to verify the customer is the owner before scheduling FPL move-in or EV services. Pass only the customer name and the address you are confirming.",
+        "Use this to confirm whether a specific property address belongs to the customer. Call this AFTER get_recent_property_events or search_properties_by_owner reveals a property, when you need to verify the customer is the owner before scheduling FPL move-in or EV services. Pass the customer name or alternate name and the address you are confirming.",
       inputSchema: {
         customer_name: z.string(),
+        alternate_name: z.string().optional(),
         email: z.string().optional(),
         phone: z.string().optional(),
         known_addresses: z.array(z.string()).optional()
@@ -743,11 +762,12 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "search_properties_by_owner",
         description:
-          "Search public property records by owner name, email, or phone. Returns matching property records with ownership, recording, and utility provider details.",
+          "Search public property records by owner name, alternate name, email, or phone. Returns matching property records with ownership, recording, and utility provider details.",
         inputSchema: {
           type: "object",
           properties: {
             owner_name: { type: "string" },
+            alternate_name: { type: "string" },
             email: { type: "string" },
             phone: { type: "string" },
             city: { type: "string" },
@@ -765,6 +785,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
           type: "object",
           properties: {
             owner_name: { type: "string" },
+            alternate_name: { type: "string" },
             email: { type: "string" },
             phone: { type: "string" },
             days_back: { type: "number" }
@@ -781,6 +802,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
           type: "object",
           properties: {
             customer_name: { type: "string" },
+            alternate_name: { type: "string" },
             email: { type: "string" },
             phone: { type: "string" },
             known_addresses: { type: "array", items: { type: "string" } }
