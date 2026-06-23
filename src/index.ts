@@ -259,16 +259,16 @@ const matchPropertyToCustomer = async (input: {
 
   if (identitySignals >= 2 && knownAddressMatch) {
     confidence = "high";
-    reason = `Owner name ${customer_name} matches customer profile, the email/phone matches, and the known address anchors the customer. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
+    reason = `Owner name ${customer_name} matches customer profile, the email/phone matches, and the known address anchors the customer. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date} (closing/purchase date: ${matchedRecord.closing_date ? new Date(matchedRecord.closing_date).toDateString() : "not available"}, sale price: ${matchedRecord.sale_price != null ? `$${matchedRecord.sale_price.toLocaleString()}` : "not available"}).`;
   } else if (identitySignals >= 2) {
     confidence = "high";
-    reason = `Owner name ${customer_name} matches customer profile and the email/phone matches. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
+    reason = `Owner name ${customer_name} matches customer profile and the email/phone matches. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date} (closing/purchase date: ${matchedRecord.closing_date ? new Date(matchedRecord.closing_date).toDateString() : "not available"}, sale price: ${matchedRecord.sale_price != null ? `$${matchedRecord.sale_price.toLocaleString()}` : "not available"}).`;
   } else if (knownAddressMatch) {
     confidence = "high";
-    reason = `The known address anchors the customer to the profile, and a recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
+    reason = `The known address anchors the customer to the profile, and a recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date} (closing/purchase date: ${matchedRecord.closing_date ? new Date(matchedRecord.closing_date).toDateString() : "not available"}, sale price: ${matchedRecord.sale_price != null ? `$${matchedRecord.sale_price.toLocaleString()}` : "not available"}).`;
   } else if (identitySignals === 1) {
     confidence = "medium";
-    reason = `One identifying signal matches the customer profile. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date}.`;
+    reason = `One identifying signal matches the customer profile. A recent public property record shows ${matchedRecord.address} in ${matchedRecord.city} recorded on ${matchedRecord.recording_date} (closing/purchase date: ${matchedRecord.closing_date ? new Date(matchedRecord.closing_date).toDateString() : "not available"}, sale price: ${matchedRecord.sale_price != null ? `$${matchedRecord.sale_price.toLocaleString()}` : "not available"}).`;
   } else {
     confidence = "low";
     reason = "Only weak or no identifying signals match the customer profile.";
@@ -288,6 +288,7 @@ const matchPropertyToCustomer = async (input: {
       legal_description: matchedRecord.legal_description,
       recording_date: matchedRecord.recording_date,
       closing_date: matchedRecord.closing_date,
+      purchase_date: matchedRecord.closing_date,
       document_number: matchedRecord.document_number,
       book_page: matchedRecord.book_page,
       sale_price: matchedRecord.sale_price,
@@ -348,6 +349,7 @@ const toRecordOutput = (record: any) => ({
   event_type: record.event_type,
   recording_date: record.recording_date,
   closing_date: record.closing_date,
+  purchase_date: record.closing_date,
   document_number: record.document_number,
   book_page: record.book_page,
   sale_price: record.sale_price,
@@ -358,6 +360,18 @@ const toRecordOutput = (record: any) => ({
   property_type: record.property_type,
   has_garage: record.has_garage
 });
+
+const formatPropertySummary = (record: any) =>
+  `${record.address}, ${record.city}, ${record.state} ${record.zip}` +
+  ` | Owner: ${record.owner_name}` +
+  ` | Event: ${record.event_type}` +
+  ` | Closing/purchase date: ${record.closing_date ? new Date(record.closing_date).toDateString() : "not available"}` +
+  ` | Recorded: ${new Date(record.recording_date).toDateString()}` +
+  ` | Sale price: ${record.sale_price != null ? `$${record.sale_price.toLocaleString()}` : "not available"}` +
+  ` | Assessed value: ${record.assessed_value != null ? `$${record.assessed_value.toLocaleString()}` : "not available"}` +
+  ` | Property type: ${record.property_type || "unknown"}` +
+  ` | Has garage: ${record.has_garage ? "yes" : "no"}` +
+  ` | Utility provider: ${record.utility_provider || "unknown"}`;
 
 const requireAuth = async (request: IncomingMessage, response: ServerResponse): Promise<{ authorized: boolean; userId?: string }> => {
   const authHeader = request.headers.authorization;
@@ -581,15 +595,8 @@ const createPropertyRecordsMcpServer = () => {
       const recentPurchases = matches.filter(r => r.event_type === "recent purchase");
       const summary = matches.length === 0
         ? "No property records found for this customer."
-        : `Found ${matches.length} property record(s). ${recentPurchases.length > 0
-            ? `IMPORTANT: ${recentPurchases.length} recent purchase(s) detected — the customer has recently bought a new home at: ${recentPurchases.map(r =>
-                `${r.address}, ${r.city}, ${r.state} ${r.zip}` +
-                ` | Closing date: ${r.closing_date ? new Date(r.closing_date).toDateString() : "not available"}` +
-                ` | Recorded: ${new Date(r.recording_date).toDateString()}` +
-                ` | Property type: ${r.property_type || "unknown"}` +
-                ` | Has garage: ${r.has_garage ? "yes" : "no"}` +
-                ` | Utility provider: ${r.utility_provider || "unknown"}`
-              ).join("; ")}. Use the closing date to schedule FPL move-in. Offer EV services for the new property.`
+        : `Found ${matches.length} property record(s): ${matches.map(formatPropertySummary).join("; ")}. ${recentPurchases.length > 0
+            ? `IMPORTANT: ${recentPurchases.length} recent purchase(s) detected — use the closing/purchase date to schedule FPL move-in and offer EV services for the new property.`
             : "No recent purchases found."}`;
       return {
         content: [{
@@ -617,14 +624,7 @@ const createPropertyRecordsMcpServer = () => {
       const events = await getRecentPropertyEvents(args);
       const summary = events.length === 0
         ? "No recent property events found for this customer in the last " + (args.days_back ?? 90) + " days."
-        : `IMPORTANT: Found ${events.length} recent property event(s). The customer has recently purchased or moved to: ${events.map(r =>
-            `${r.address}, ${r.city}, ${r.state} ${r.zip}` +
-            ` | Closing date: ${r.closing_date ? new Date(r.closing_date).toDateString() : "not available"}` +
-            ` | Recorded: ${new Date(r.recording_date).toDateString()}` +
-            ` | Property type: ${r.property_type || "unknown"}` +
-            ` | Has garage: ${r.has_garage ? "yes" : "no"}` +
-            ` | Utility provider: ${r.utility_provider || "unknown"}`
-          ).join("; ")}. Use the closing date to schedule FPL move-in. Proactively offer EV services, start_service_connection, and enroll_ev_charging for the new property.`;
+        : `IMPORTANT: Found ${events.length} recent property event(s). The customer has recently purchased or moved to: ${events.map(formatPropertySummary).join("; ")}. Use the closing/purchase date to schedule FPL move-in. Proactively offer EV services, start_service_connection, and enroll_ev_charging for the new property.`;
       return {
         content: [{
           type: "text" as const,
@@ -661,16 +661,21 @@ const createPropertyRecordsMcpServer = () => {
     },
     async ({ address }) => {
       const record = await getPropertyRecordByAddress(address);
+      const summary = record
+        ? `Property record found at ${formatPropertySummary(record)}.`
+        : `No matching property record found for ${address}.`;
       return jsonContent(
         record
           ? {
               found: true,
               data_source: "property records database",
+              summary,
               record: toRecordOutput(record)
             }
           : {
               found: false,
               data_source: "property records database",
+              summary,
               message: "No matching property record found for the given address."
             }
       );
