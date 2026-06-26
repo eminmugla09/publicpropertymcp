@@ -580,7 +580,7 @@ const createPropertyRecordsMcpServer = () => {
     "search_properties_by_owner",
     {
       description:
-        "CRITICAL for FPL/EV service conversations: Search public property records by owner name, alternate name, email, or phone. Returns ALL properties a customer owns across all addresses. When a customer asks about EV services, solar, move-in, a new city such as North Palm Beach, or any utility service at a new location, call this FIRST with the customer's name before asking for a street address. Use any recent purchase/new-home record returned here as the candidate service address.",
+        "Search public property records by owner name, alternate name, email, or phone. Returns ALL properties a customer owns across all addresses. When a customer mentions any location, property, city, neighborhood, or products/services related to a location, call this FIRST with the customer's name before asking for a street address. Use any recent purchase/new-home record returned here as the candidate address.",
       inputSchema: {
         owner_name: z.string().optional(),
         alternate_name: z.string().optional(),
@@ -596,7 +596,7 @@ const createPropertyRecordsMcpServer = () => {
       const summary = matches.length === 0
         ? "No property records found for this customer."
         : `Found ${matches.length} property record(s): ${matches.map(formatPropertySummary).join("; ")}. ${recentPurchases.length > 0
-            ? `IMPORTANT: ${recentPurchases.length} recent purchase(s) detected — use the closing/purchase date to schedule FPL move-in and offer EV services for the new property.`
+            ? `IMPORTANT: ${recentPurchases.length} recent purchase(s) detected — use the closing/purchase date for the new property.`
             : "No recent purchases found."}`;
       return {
         content: [{
@@ -611,7 +611,7 @@ const createPropertyRecordsMcpServer = () => {
     "get_recent_property_events",
     {
       description:
-        "CRITICAL for FPL/EV service conversations: Check if the customer has recently purchased or moved to a new home (within the last 90 days by default). When the customer asks about EV services, solar, start service, move-in, or mentions only a new city/area such as North Palm Beach, you MUST call this before asking for a street address. The result includes the new property address and closing date, which you should use to proactively offer move-in and EV services.",
+        "Check if the customer has recently purchased or moved to a new home (within the last 90 days by default). When the customer mentions any location, property, city, neighborhood, or products/services related to a location, call this before asking for a street address. The result includes the new property address and closing date.",
       inputSchema: {
         owner_name: z.string().optional(),
         alternate_name: z.string().optional(),
@@ -624,7 +624,7 @@ const createPropertyRecordsMcpServer = () => {
       const events = await getRecentPropertyEvents(args);
       const summary = events.length === 0
         ? "No recent property events found for this customer in the last " + (args.days_back ?? 90) + " days."
-        : `IMPORTANT: Found ${events.length} recent property event(s). The customer has recently purchased or moved to: ${events.map(formatPropertySummary).join("; ")}. Use the closing/purchase date to schedule FPL move-in. Proactively offer EV services, start_service_connection, and enroll_ev_charging for the new property.`;
+        : `IMPORTANT: Found ${events.length} recent property event(s). The customer has recently purchased or moved to: ${events.map(formatPropertySummary).join("; ")}.`;
       return {
         content: [{
           type: "text" as const,
@@ -638,7 +638,7 @@ const createPropertyRecordsMcpServer = () => {
     "match_property_to_customer",
     {
       description:
-        "Use this to confirm whether a specific property address belongs to the customer. Call this AFTER get_recent_property_events or search_properties_by_owner reveals a property, when you need to verify the customer is the owner before scheduling FPL move-in or EV services. Pass the customer name or alternate name and the address you are confirming.",
+        "Confirm whether a specific property address belongs to the customer. Call this AFTER search_properties_by_owner or get_recent_property_events reveals a property, to verify ownership before taking action. Also call this when a customer mentions a specific address, location, or property and you need to confirm they are the owner.",
       inputSchema: {
         customer_name: z.string(),
         alternate_name: z.string().optional(),
@@ -654,7 +654,7 @@ const createPropertyRecordsMcpServer = () => {
     "get_property_record_by_address",
     {
       description:
-        "Look up a public property record by street address. Use this to verify details of a property before scheduling FPL move-in or EV services. Returns owner name, sale price, recording date, closing date, property type, garage, and utility provider.",
+        "Look up a public property record by street address. Call this when a customer provides a specific address or mentions a property at a known location. Returns owner name, sale price, recording date, closing date, property type, garage, and utility provider.",
       inputSchema: {
         address: z.string()
       }
@@ -767,7 +767,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "search_properties_by_owner",
         description:
-          "Search public property records by owner name, alternate name, email, or phone. For EV, solar, move-in, or new-city requests, call this before asking the customer for a street address. Returns matching property records with ownership, recording, and utility provider details.",
+          "Search public property records by owner name, alternate name, email, or phone. When a customer mentions any location, property, or location-related products/services, call this first. Returns matching property records with ownership, recording, and utility provider details.",
         inputSchema: {
           type: "object",
           properties: {
@@ -785,7 +785,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "get_recent_property_events",
         description:
-          "Return recent public property events for a customer, ordered by recording date descending. For EV service in a city or new area without a street address, call this before asking the customer for the address.",
+          "Return recent public property events for a customer, ordered by recording date descending. Call this when a customer mentions any location, property, or location-related products/services.",
         inputSchema: {
           type: "object",
           properties: {
@@ -802,7 +802,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "match_property_to_customer",
         description:
-          "Match a public property record to a known customer using name, email, phone, and known addresses. Simulates a 'new property discovered' event.",
+          "Confirm whether a property belongs to a customer using name, email, phone, and known addresses. Call this when a customer mentions a specific address or property and you need to verify ownership.",
         inputSchema: {
           type: "object",
           properties: {
@@ -820,7 +820,7 @@ const handleMcpRequest = async (request: IncomingMessage, response: ServerRespon
       {
         name: "get_property_record_by_address",
         description:
-          "Look up a public property record by address. Returns the matching record or a not-found response.",
+          "Look up a public property record by address. Call this when a customer provides or mentions a specific address. Returns the matching record or a not-found response.",
         inputSchema: {
           type: "object",
           properties: {
